@@ -25,44 +25,60 @@ restore_apt() {
   rm -rf "$APT_BAK"
 }
 trap restore_apt EXIT
-if [ "${ID:-}" = ubuntu ]; then
-  M=http://ports.ubuntu.com/ubuntu-ports
-  [ "$(dpkg --print-architecture)" = amd64 ] && M=http://archive.ubuntu.com/ubuntu
-  cat > /etc/apt/sources.list <<EOS
-deb $M $CODENAME main universe
-deb $M $CODENAME-updates main universe
-deb $M $CODENAME-security main universe
-EOS
-else
-  SEC="$CODENAME-security"; [ "$CODENAME" = buster ] && SEC="buster/updates"
-  cat > /etc/apt/sources.list <<EOS
-deb http://deb.debian.org/debian $CODENAME main contrib non-free
-deb http://deb.debian.org/debian $CODENAME-updates main contrib non-free
-deb http://deb.debian.org/debian-security $SEC main contrib non-free
-EOS
-fi
-log "Using official package servers for ${ID:-?} $CODENAME"
-apt_ok() { apt-cache show avahi-daemon python3-venv >/dev/null 2>&1; }
-rm -rf /var/lib/apt/lists/*   # drop stale lists from the vendor mirror
-apt-get update || true
-if ! apt_ok; then
-  if [ "${ID:-}" != ubuntu ]; then
-    # Older Debian releases (e.g. bullseye after its support ended) move to archive.debian.org.
-    log "Main Debian servers failed - trying archive.debian.org"
-    cat > /etc/apt/sources.list <<EOS
-deb http://archive.debian.org/debian $CODENAME main contrib non-free
-deb http://archive.debian.org/debian $CODENAME-updates main contrib non-free
-deb http://archive.debian.org/debian-security $SEC main contrib non-free
-EOS
-    apt-get -o Acquire::Check-Valid-Until=false update || true
+PKGS="avahi-daemon libnss-mdns network-manager dnsmasq-base wpasupplicant iw rfkill wireless-regdb
+  sudo python3 ca-certificates dosfstools fdisk e2fsprogs util-linux curl tzdata"
+
+# Writes /etc/apt/sources.list for one of several server choices.
+set_sources() {
+  if [ "${ID:-}" = ubuntu ]; then
+    local M=http://ports.ubuntu.com/ubuntu-ports
+    [ "$(dpkg --print-architecture)" = amd64 ] && M=http://archive.ubuntu.com/ubuntu
+    case "$1" in
+      full) printf 'deb %s %s main universe\ndeb %s %s-updates main universe\ndeb %s %s-security main universe\n' "$M" "$CODENAME" "$M" "$CODENAME" "$M" "$CODENAME" ;;
+      base) printf 'deb %s %s main universe\n' "$M" "$CODENAME" ;;
+      *) return 1 ;;
+    esac > /etc/apt/sources.list
+    return 0
   fi
-  apt_ok || { echo "[customize] ERROR: no package server reachable for ${ID:-?} $CODENAME"; exit 1; }
-fi
-apt-get install -y --no-install-recommends \
-  avahi-daemon libnss-mdns network-manager dnsmasq-base wpasupplicant iw rfkill wireless-regdb \
-  sudo python3 python3-venv ca-certificates dosfstools fdisk e2fsprogs util-linux curl tzdata
+  local SEC="$CODENAME-security"; [ "$CODENAME" = buster ] && SEC="buster/updates"
+  local C="main contrib non-free"
+  case "$1" in
+    # 1) normal Debian servers incl. security updates
+    full) printf 'deb http://deb.debian.org/debian %s %s\ndeb http://deb.debian.org/debian %s-updates %s\ndeb http://deb.debian.org/debian-security %s %s\n' \
+            "$CODENAME" "$C" "$CODENAME" "$C" "$SEC" "$C" ;;
+    # 2) old release whose security updates were moved: security from archive.debian.org
+    mixed) printf 'deb http://deb.debian.org/debian %s %s\ndeb http://deb.debian.org/debian %s-updates %s\ndeb http://archive.debian.org/debian-security %s %s\n' \
+            "$CODENAME" "$C" "$CODENAME" "$C" "$SEC" "$C" ;;
+    # 3) snapshot.debian.org keeps every package version ever published (slow but complete)
+    snapshot) printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260815T000000Z %s %s\ndeb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260815T000000Z %s-updates %s\ndeb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260815T000000Z %s %s\n' \
+            "$CODENAME" "$C" "$CODENAME" "$C" "$SEC" "$C" ;;
+    # 4) without security updates
+    base) printf 'deb http://deb.debian.org/debian %s %s\ndeb http://deb.debian.org/debian %s-updates %s\n' "$CODENAME" "$C" "$CODENAME" "$C" ;;
+    # 5) fully archived release
+    archive) printf 'deb http://archive.debian.org/debian %s %s\ndeb http://archive.debian.org/debian-security %s %s\n' "$CODENAME" "$C" "$SEC" "$C" ;;
+    *) return 1 ;;
+  esac > /etc/apt/sources.list
+}
+
+INSTALLED=0
+for choice in full mixed snapshot base archive; do
+  set_sources "$choice" || continue
+  log "Trying package servers: $choice (${ID:-?} $CODENAME)"
+  rm -rf /var/lib/apt/lists/*   # drop stale lists from earlier attempts / the vendor mirror
+  apt-get -o Acquire::Check-Valid-Until=false update || true
+  # shellcheck disable=SC2086
+  if apt-get install -y --no-install-recommends $PKGS; then
+    INSTALLED=1
+    break
+  fi
+  log "That didn't work, trying the next option"
+done
+[ "$INSTALLED" = 1 ] || { echo "[customize] ERROR: could not install the system packages from any package server"; exit 1; }
 # Optional, nice to have; ignore if the distro calls them differently.
 apt-get install -y --no-install-recommends openssh-server || true
+# python3-venv must match the exact Python version already in the image; if it can't be
+# installed we build the environment without it (below).
+apt-get install -y --no-install-recommends python3-venv || log "python3-venv not available, using fallback"
 
 # ---------------------------------------------------------------- user & folders
 if ! id ffbridge >/dev/null 2>&1; then
@@ -77,9 +93,17 @@ chmod 755 /opt/ffbridge/bin/pibridge
 
 # ---------------------------------------------------------------- AI environment
 log "Creating the AI Python environment"
-python3 -m venv /opt/ffbridge/ai/venv
-/opt/ffbridge/ai/venv/bin/pip install --no-cache-dir --upgrade pip
-/opt/ffbridge/ai/venv/bin/pip install --no-cache-dir -r /opt/ffbridge/ai/requirements.txt
+rm -rf /opt/ffbridge/ai/venv
+if ! python3 -m venv /opt/ffbridge/ai/venv; then
+  rm -rf /opt/ffbridge/ai/venv
+  python3 -m venv --without-pip /opt/ffbridge/ai/venv
+  PYV="$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
+  curl -fsSL "https://bootstrap.pypa.io/pip/$PYV/get-pip.py" -o /tmp/get-pip.py \
+    || curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+  /opt/ffbridge/ai/venv/bin/python /tmp/get-pip.py --no-cache-dir
+fi
+/opt/ffbridge/ai/venv/bin/python -m pip install --no-cache-dir --upgrade "pip<26"
+/opt/ffbridge/ai/venv/bin/python -m pip install --no-cache-dir -r /opt/ffbridge/ai/requirements.txt
 /opt/ffbridge/ai/venv/bin/python -c "import onnxruntime, numpy, PIL; print('onnxruntime', onnxruntime.__version__)"
 
 # ---------------------------------------------------------------- SD-card settings drive
