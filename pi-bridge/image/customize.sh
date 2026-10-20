@@ -9,8 +9,55 @@ log() { echo "[customize] $*"; }
 
 # ---------------------------------------------------------------- packages
 log "Installing system packages"
-# Vendor images sometimes ship broken/unsigned extra repos; don't let them stop the build.
-apt-get update -o Acquire::AllowInsecureRepositories=false || apt-get update || true
+# Vendor images point apt at their own mirrors (e.g. repo.huaweicloud.com), which are often
+# slow, out of date or unreachable from the build server. For the build we use the official
+# Debian/Ubuntu servers and put the vendor's settings back afterwards.
+. /etc/os-release
+CODENAME="${VERSION_CODENAME:-}"
+APT_BAK=/tmp/apt-sources-backup
+rm -rf "$APT_BAK"; mkdir -p "$APT_BAK"
+cp -a /etc/apt/sources.list "$APT_BAK/" 2>/dev/null || true
+[ -d /etc/apt/sources.list.d ] && cp -a /etc/apt/sources.list.d "$APT_BAK/" && rm -f /etc/apt/sources.list.d/*
+restore_apt() {
+  rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
+  [ -f "$APT_BAK/sources.list" ] && cp -a "$APT_BAK/sources.list" /etc/apt/sources.list
+  [ -d "$APT_BAK/sources.list.d" ] && cp -a "$APT_BAK/sources.list.d/." /etc/apt/sources.list.d/
+  rm -rf "$APT_BAK"
+}
+trap restore_apt EXIT
+if [ "${ID:-}" = ubuntu ]; then
+  M=http://ports.ubuntu.com/ubuntu-ports
+  [ "$(dpkg --print-architecture)" = amd64 ] && M=http://archive.ubuntu.com/ubuntu
+  cat > /etc/apt/sources.list <<EOS
+deb $M $CODENAME main universe
+deb $M $CODENAME-updates main universe
+deb $M $CODENAME-security main universe
+EOS
+else
+  SEC="$CODENAME-security"; [ "$CODENAME" = buster ] && SEC="buster/updates"
+  cat > /etc/apt/sources.list <<EOS
+deb http://deb.debian.org/debian $CODENAME main contrib non-free
+deb http://deb.debian.org/debian $CODENAME-updates main contrib non-free
+deb http://deb.debian.org/debian-security $SEC main contrib non-free
+EOS
+fi
+log "Using official package servers for ${ID:-?} $CODENAME"
+apt_ok() { apt-cache show avahi-daemon python3-venv >/dev/null 2>&1; }
+rm -rf /var/lib/apt/lists/*   # drop stale lists from the vendor mirror
+apt-get update || true
+if ! apt_ok; then
+  if [ "${ID:-}" != ubuntu ]; then
+    # Older Debian releases (e.g. bullseye after its support ended) move to archive.debian.org.
+    log "Main Debian servers failed - trying archive.debian.org"
+    cat > /etc/apt/sources.list <<EOS
+deb http://archive.debian.org/debian $CODENAME main contrib non-free
+deb http://archive.debian.org/debian $CODENAME-updates main contrib non-free
+deb http://archive.debian.org/debian-security $SEC main contrib non-free
+EOS
+    apt-get -o Acquire::Check-Valid-Until=false update || true
+  fi
+  apt_ok || { echo "[customize] ERROR: no package server reachable for ${ID:-?} $CODENAME"; exit 1; }
+fi
 apt-get install -y --no-install-recommends \
   avahi-daemon libnss-mdns network-manager dnsmasq-base wpasupplicant iw rfkill wireless-regdb \
   sudo python3 python3-venv ca-certificates dosfstools fdisk e2fsprogs util-linux curl tzdata
@@ -82,6 +129,7 @@ if [ -f /etc/network/interfaces ]; then
 fi
 
 # ---------------------------------------------------------------- tidy up
+restore_apt; trap - EXIT
 apt-get clean
 rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
 # A fresh machine-id is generated on first boot (needed for unique DHCP/mDNS identity).
