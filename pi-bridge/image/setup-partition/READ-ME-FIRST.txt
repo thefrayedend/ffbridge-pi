@@ -1,0 +1,54 @@
+FlashForge Bridge - quick start
+===============================
+
+What you need
+-------------
+* This SD card (already prepared - you're reading it!)
+* The Orange Pi Zero 4 board and a USB-C power supply (5V / 3A or better)
+* Your FlashForge printer (Creator 5 / 5 Pro, AD5X, Adventurer 5M / 5M Pro)
+  on the same home network
+
+Step 1 - Wi-Fi  (skip if you plug the board into your router with a cable)
+-------------------------------------------------------------------------
+Open  ffbridge-config.txt  on this drive (double-click it, it opens in Notepad).
+Fill in:
+    wifi_name=YourWiFiName
+    wifi_password=YourWiFiPassword
+Save the file. Eject the SD card safely.
+
+Step 2 - Start the board
+------------------------
+Put the SD card into the board and plug in the power.
+The first start takes about 2 minutes (it sets itself up). Later starts are faster.
+
+Step 3 - Open the setup page
+----------------------------
+On a phone, tablet or computer on the same Wi-Fi, open:
+
+    http://ffbridge.local
+
+Doesn't open?
+ * Wait one more minute and try again.
+ * Look in your router's app for a device called "ffbridge" and open its address,
+   e.g. http://192.168.1.57
+ * Put the SD card back in your computer: the file MY-BRIDGE-ADDRESS.txt on it
+   shows the board's address (it appears once the board was online).
+ * Wi-Fi details wrong? The board then makes its own Wi-Fi network called
+   "FlashForge-Bridge-XXXX" (password: flashforge). Connect your phone to it -
+   the setup page opens by itself (or go to http://10.42.0.1) - and pick your
+   home Wi-Fi there.
+
+Step 4 - Add your printer
+-------------------------
+On the printer's screen: Settings > Network > turn on "LAN-only mode".
+It shows a pairing code. On the setup page press "Scan network", pick your
+printer, type the pairing code, press "Test connection", then "Save".
+
+Done! Open Mainsail from the setup page, or connect OrcaSlicer
+(host type "Octo/Klipper", address shown on the setup page).
+
+AI failure detection
+--------------------
+Switched on by default. While a print runs, the board looks at the printer's
+camera and warns you about "spaghetti" failures. On the "AI Watch" page you can
+choose to also pause the print automatically.

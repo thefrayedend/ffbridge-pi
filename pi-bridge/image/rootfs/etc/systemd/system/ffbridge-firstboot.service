@@ -1,0 +1,15 @@
+[Unit]
+Description=FlashForge Bridge first boot (grow SD card partition, new SSH keys)
+DefaultDependencies=no
+After=local-fs.target
+Before=ffbridge-config.service ffbridge.service
+ConditionPathExists=!/var/lib/ffbridge-sys/firstboot.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ffbridge-helper firstboot
+RemainAfterExit=yes
+TimeoutStartSec=15min
+
+[Install]
+WantedBy=multi-user.target

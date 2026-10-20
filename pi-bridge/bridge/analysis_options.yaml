@@ -1,0 +1,3 @@
+analyzer:
+  errors:
+    avoid_relative_lib_imports: ignore

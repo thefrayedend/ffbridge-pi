@@ -1,0 +1,88 @@
+HOW TO GET THE FINISHED SD CARD IMAGE (one time, about 15 minutes of clicking)
+==============================================================================
+
+Why GitHub? Building the image takes a Linux computer with an ARM processor.
+GitHub lends you one for free. You upload the files, press a button, and it
+builds the image for you.
+
+You need: the Orange Pi Zero 4 image you downloaded, and the Chrome or Edge browser.
+(Don't upload this file, GITHUB-STEPS.txt. It's only the instructions.)
+
+
+STEP 1 - Make a free GitHub account (skip this if you already have one)
+-----------------------------------------------------------------------
+Go to https://github.com and click "Sign up". Follow the steps.
+
+
+STEP 2 - Make a new, empty project ("repository")
+-------------------------------------------------
+1. Go to https://github.com/new
+2. Repository name:  ffbridge-pi
+3. Choose "Public". (The free build computer is only free for public projects.)
+4. Do NOT tick "Add a README file". Leave everything else as it is.
+5. Click the green "Create repository" button.
+
+
+STEP 3 - Upload the files
+-------------------------
+1. On the page you see now, click the blue link "uploading an existing file".
+2. In File Explorer, open the folder  FFBridge-for-GitHub
+   (it's in your FlashForgeUI-Electron-Creator5-main - BTT pi folder).
+3. Press Ctrl+A to select everything in it, then drag it all into the browser
+   window, onto the box that says "Drag files here".
+4. Wait until the list of files stops growing (about 60 files).
+5. Scroll down and click the green "Commit changes" button.
+
+
+STEP 4 - Add the "build" button (copy and paste one file)
+---------------------------------------------------------
+1. On your project's main page click "Add file", then "Create new file".
+2. In the file name box at the top, type exactly:
+       .github/workflows/build-image.yml
+   (When you type each "/", GitHub turns the part before it into a folder.
+   That's normal.)
+3. On your PC, open  FFBridge-for-GitHub\pi-bridge\github-workflows\build-image.yml
+   with Notepad (right-click > Open with > Notepad).
+   Press Ctrl+A, then Ctrl+C.
+4. Click in the big empty box in the browser and press Ctrl+V.
+5. Click the green "Commit changes..." button, then "Commit changes" again.
+
+
+STEP 5 - Upload the Orange Pi image you downloaded
+--------------------------------------------------
+1. Go back to your project's main page (click "ffbridge-pi" at the top).
+2. On the right side, under "Releases", click "Create a new release".
+3. Click "Choose a tag" (or "Select tag"), type:   base-image
+   then click "+ Create new tag: base-image on publish".
+4. Release title:  Orange Pi base image
+5. Drag the Orange Pi Zero 4 image file you downloaded onto the box
+   "Attach binaries by dropping them here".
+   This can take a few minutes. Wait until it finishes.
+   (It must be the Debian or Ubuntu "server" image for the Orange Pi Zero 4.
+   GitHub accepts files up to 2 GB.)
+6. Click the green "Publish release" button.
+
+
+STEP 6 - Press the build button
+-------------------------------
+1. Click the "Actions" tab at the top of your project.
+   If you see a green button "I understand my workflows, go ahead and enable them",
+   click it.
+2. On the left, click "Build SD card image".
+3. On the right, click "Run workflow", then the green "Run workflow" button.
+4. Refresh the page after a few seconds. A yellow dot means it's building.
+   It takes about 30 to 60 minutes. You can close the browser in the meantime.
+   - Green tick = done.
+   - Red X = something went wrong. Click on it, take a screenshot and show it to Claude.
+
+
+STEP 7 - Download the finished image
+------------------------------------
+1. On your project's main page, on the right, click "Releases".
+2. Open "Latest SD card image".
+3. Click  ffbridge-orangepi-zero4.img.xz  to download it.
+4. Write it to the SD card with balenaEtcher (https://etcher.balena.io)
+   or Raspberry Pi Imager ("Choose OS" > "Use custom").
+   You don't need to unzip it first.
+
+That's the file you give to other people too. They only need step 7.

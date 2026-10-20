@@ -1,0 +1,15 @@
+[Unit]
+Description=FlashForge Bridge - apply ffbridge-config.txt from the SD card (Wi-Fi, name, SSH)
+After=NetworkManager.service ffsetup.mount ffbridge-firstboot.service
+Wants=NetworkManager.service
+Before=network-online.target ffbridge.service ffbridge-hotspot.service avahi-daemon.service
+RequiresMountsFor=/ffsetup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ffbridge-helper apply-config
+RemainAfterExit=yes
+TimeoutStartSec=2min
+
+[Install]
+WantedBy=multi-user.target

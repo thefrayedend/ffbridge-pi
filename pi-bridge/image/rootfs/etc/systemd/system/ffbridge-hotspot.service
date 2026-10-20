@@ -1,0 +1,12 @@
+[Unit]
+Description=FlashForge Bridge - setup Wi-Fi hotspot when there is no network
+After=NetworkManager.service ffbridge-config.service
+Wants=NetworkManager.service
+
+[Service]
+ExecStart=/usr/local/sbin/ffbridge-helper hotspot-watch
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+name: ffbridge_pi
+description: "FlashForge Pi Bridge - headless Moonraker/Mainsail bridge + setup page + AI failure detection for single-board computers (Orange Pi Zero 4 etc.)."
+publish_to: 'none'
+version: 1.0.0
+
+environment:
+  sdk: ^3.5.0
+
+# No third-party packages on purpose: the bridge core (shared with the Android TV app,
+# imported by relative path from ../../android-tv-app/source/lib/core) only uses dart:*.

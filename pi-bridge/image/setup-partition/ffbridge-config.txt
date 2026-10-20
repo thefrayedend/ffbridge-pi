@@ -1,0 +1,45 @@
+# =====================================================================
+#  FlashForge Bridge - settings
+# =====================================================================
+#
+#  1. Type your home Wi-Fi name and password after the = signs below.
+#     (Using an Ethernet cable instead? Then you can skip this.)
+#  2. Save this file (in Notepad: File > Save).
+#  3. Eject the SD card, put it in the board and plug in the power.
+#  4. Wait 2 minutes, then open  http://ffbridge.local  in your browser.
+#
+#  Upper and lower case matter. Don't add spaces around the = sign.
+#  Lines starting with # are only notes - the board ignores them.
+# ---------------------------------------------------------------------
+
+wifi_name=
+wifi_password=
+
+# Two-letter country code, so Wi-Fi uses the right channels (US, CA, GB, DE, AU, ...)
+wifi_country=US
+
+
+# =====================================================================
+#  Everything below is OPTIONAL. You can leave it as it is.
+# =====================================================================
+
+# Set to yes if your Wi-Fi network is hidden (does not show up in lists).
+wifi_hidden=no
+
+# Name of the board on your network. The setup page is then at http://<name>.local
+# Change it only if you have more than one bridge (e.g. ffbridge2).
+hostname=ffbridge
+
+# Add your printer right away instead of using the setup page.
+# Turn on LAN-only mode on the printer (Settings > Network) to see the pairing code.
+printer_ip=
+printer_code=
+printer_name=
+
+# Your time zone (for print history), e.g. America/New_York, Europe/London
+timezone=
+
+# For advanced users: remote login (SSH) as user "ffadmin".
+# Set ssh=yes and choose a password of at least 6 characters.
+ssh=no
+ssh_password=

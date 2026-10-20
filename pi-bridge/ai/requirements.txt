@@ -1,0 +1,4 @@
+# AI service dependencies (aarch64 wheels exist on PyPI for all of these).
+onnxruntime>=1.18,<2
+numpy>=1.24,<3
+pillow>=10,<13

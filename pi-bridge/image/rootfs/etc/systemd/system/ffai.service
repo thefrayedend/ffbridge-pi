@@ -1,0 +1,25 @@
+[Unit]
+Description=FlashForge Bridge - AI print failure detection (Obico model, ONNX Runtime)
+After=network.target
+
+[Service]
+User=ffbridge
+Group=ffbridge
+Environment=FFAI_MODEL=/opt/ffbridge/ai/model/model-weights.onnx
+Environment=FFAI_HOST=127.0.0.1
+Environment=FFAI_PORT=3333
+EnvironmentFile=-/etc/default/ffai
+ExecStart=/opt/ffbridge/ai/venv/bin/python /opt/ffbridge/ai/ffai_server.py
+# Keep the printer bridge responsive: AI runs at lower priority with a memory cap.
+Nice=10
+CPUWeight=50
+MemoryMax=1500M
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

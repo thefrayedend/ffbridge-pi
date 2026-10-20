@@ -1,0 +1,24 @@
+FlashForge Pi Bridge - third-party components and licenses
+==========================================================
+
+FlashForge Pi Bridge (bridge server, setup page, image scripts)
+  MIT License. Based on FlashForgeUI by GhostTypes (MIT) and its protocol work
+  (ff-5mp-api-ts, MIT).
+
+Mainsail 2.19 (web interface, shipped unmodified in /opt/ffbridge/mainsail)
+  GPL-3.0, https://github.com/mainsail-crew/mainsail
+
+AI failure detection service (/opt/ffbridge/ai/ffai_server.py)
+  AGPL-3.0-or-later. Contains pre/post-processing ported from Obico Server
+  (https://github.com/TheSpaghettiDetective/obico-server, ml_api/lib/onnx.py, AGPL-3.0).
+  Its complete source is the file itself, shipped on every image.
+
+Failure detection model (/opt/ffbridge/ai/model/model-weights.onnx)
+  Obico's open-source model, distributed with Obico Server (AGPL-3.0),
+  downloaded from obico.io and verified against the SHA-256 published in obico-server.
+
+The failure prediction smoothing (bridge/src/ai_monitor.dart) re-implements the algorithm
+and hyper-parameters described in obico-server backend/lib/prediction.py.
+
+ONNX Runtime (MIT), NumPy (BSD-3-Clause), Pillow (MIT-CMU) - installed from PyPI.
+Debian / Ubuntu / Armbian / Orange Pi base system - their respective licenses.

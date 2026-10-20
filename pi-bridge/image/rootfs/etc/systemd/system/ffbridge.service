@@ -1,0 +1,19 @@
+[Unit]
+Description=FlashForge Bridge (Moonraker/Mainsail bridge + setup page)
+After=network.target ffbridge-config.service ffsetup.mount
+Wants=network-online.target ffai.service
+
+[Service]
+User=ffbridge
+Group=ffbridge
+WorkingDirectory=/var/lib/ffbridge
+ExecStart=/opt/ffbridge/bin/pibridge --data /var/lib/ffbridge --mainsail /opt/ffbridge/mainsail --setup-web /opt/ffbridge/setup-web --setup-port 80 --ai-url http://127.0.0.1:3333 --boot-partition /ffsetup
+# Port 80 for the setup page without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+# NoNewPrivileges must stay off: the setup page uses sudo for the root helper.
+Restart=always
+RestartSec=5
+LimitNOFILE=16384
+
+[Install]
+WantedBy=multi-user.target

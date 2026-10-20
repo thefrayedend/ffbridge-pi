@@ -1,0 +1,2 @@
+# The bridge service may run exactly one root helper (network, hostname, reboot).
+ffbridge ALL=(root) NOPASSWD: /usr/local/sbin/ffbridge-helper

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FlashForge Bridge</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="favicon.svg" alt="" width="28" height="28">
+      <div>
+        <div class="brand-name">FlashForge Bridge</div>
+        <div class="brand-sub" id="hostline">Setup</div>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <a href="#home" data-page="home">Home</a>
+      <a href="#printers" data-page="printers">Printers</a>
+      <a href="#ai" data-page="ai">AI Watch</a>
+      <a href="#wifi" data-page="wifi">Wi-Fi</a>
+      <a href="#settings" data-page="settings">Settings</a>
+      <a href="#system" data-page="system">System</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <!-- HOME -->
+    <section class="page" id="page-home">
+      <div id="home-empty" class="hero hidden">
+        <h1>Welcome! Let's connect your printer.</h1>
+        <p>This board turns your FlashForge printer into something Mainsail and OrcaSlicer understand, and can watch your prints with AI. It only takes a minute.</p>
+        <a class="btn primary big" href="#printers">Add my printer</a>
+      </div>
+      <div id="home-printers" class="grid"></div>
+      <div class="card" id="orca-help">
+        <h2>Send prints from OrcaSlicer</h2>
+        <ol class="steps">
+          <li>In OrcaSlicer, click the <b>Wi-Fi icon</b> next to your printer (Connection settings).</li>
+          <li>Host type: <b>Octo/Klipper</b></li>
+          <li>Hostname, IP or URL: <code id="orca-host">this-board:7125</code> &nbsp;<button class="btn tiny" data-copy="orca-host">Copy</button>
+            <div class="hint">If your router gives the board a new address one day, <code id="orca-host-name">ffbridge.local:7125</code> keeps working too.</div></li>
+          <li>Leave the API key empty and press <b>Test</b>. The <b>Device</b> tab now shows Mainsail.</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- PRINTERS -->
+    <section class="page" id="page-printers">
+      <div class="card">
+        <div class="row between">
+          <h2>Printers</h2>
+          <div class="row gap">
+            <button class="btn primary" id="btn-scan">Scan network</button>
+            <button class="btn" id="btn-add-manual">Add manually</button>
+          </div>
+        </div>
+        <details class="howto" id="lan-howto">
+          <summary>Before you start: turn on LAN-only mode on the printer</summary>
+          <ol class="steps">
+            <li>On the printer's touch screen open <b>Settings</b> → <b>Network</b> (Wi-Fi or Ethernet).</li>
+            <li>Turn on <b>LAN-only mode</b>. The printer now shows an 8-character <b>pairing code</b> (also called check code).</li>
+            <li>Keep that screen open, then press <b>Scan network</b> here.</li>
+          </ol>
+          <p class="muted">Supported: Creator 5 / 5 Pro, AD5X, Adventurer 5M / 5M Pro. The printer and this board must be on the same home network.</p>
+        </details>
+        <div id="scan-results"></div>
+      </div>
+      <div class="card">
+        <h2>Your printers</h2>
+        <div id="printer-list"></div>
+      </div>
+    </section>
+
+    <!-- AI -->
+    <section class="page" id="page-ai">
+      <div class="card">
+        <div class="row between">
+          <h2>AI failure detection</h2>
+          <label class="switch"><input type="checkbox" id="ai-enabled"><span></span></label>
+        </div>
+        <p class="muted">While a print runs, the board looks at the printer camera every few seconds with an open-source AI model (from Obico) that recognises "spaghetti" and other failures. Nothing leaves your network.</p>
+        <div id="ai-service" class="notice"></div>
+        <div class="field">
+          <div class="label">When it sees a likely failure</div>
+          <div class="segmented" id="ai-action">
+            <button data-v="notify">Alert me</button>
+            <button data-v="pause">Alert me and pause the print</button>
+          </div>
+        </div>
+        <div class="field">
+          <div class="label">Sensitivity</div>
+          <div class="segmented" id="ai-sens">
+            <button data-v="low">Low</button>
+            <button data-v="medium">Normal</button>
+            <button data-v="high">High</button>
+          </div>
+          <div class="hint">"High" catches problems sooner but may raise more false alarms.</div>
+        </div>
+        <p class="hint">Alerts appear here, as a pop-up in Mainsail, and in Discord if you set it up under Settings.</p>
+      </div>
+      <div id="ai-printers" class="grid"></div>
+    </section>
+
+    <!-- WIFI -->
+    <section class="page" id="page-wifi">
+      <div class="card">
+        <h2>Network</h2>
+        <div id="net-status" class="kv"></div>
+      </div>
+      <div class="card">
+        <div class="row between">
+          <h2>Join a Wi-Fi network</h2>
+          <button class="btn" id="btn-wifi-scan">Search again</button>
+        </div>
+        <div id="wifi-list" class="list"></div>
+        <form id="wifi-form" class="stack">
+          <label class="field"><span class="label">Network name (SSID)</span><input id="wifi-ssid" autocomplete="off" required></label>
+          <label class="field"><span class="label">Password</span><input id="wifi-pass" type="password" autocomplete="off"></label>
+          <label class="check"><input type="checkbox" id="wifi-show"> Show password</label>
+          <button class="btn primary" type="submit">Connect</button>
+          <div id="wifi-msg" class="notice hidden"></div>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Board name</h2>
+        <p class="muted">You reach this page at <b>http://<span id="hn-current">ffbridge</span>.local</b>. With more than one bridge, give each a different name.</p>
+        <form id="hn-form" class="row gap wrap">
+          <input id="hn-input" pattern="[a-zA-Z0-9-]{1,32}" placeholder="ffbridge">
+          <button class="btn" type="submit">Rename</button>
+        </form>
+        <div id="hn-msg" class="notice hidden"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="page" id="page-settings">
+      <form id="settings-form">
+        <div class="card">
+          <h2>Discord notifications</h2>
+          <label class="field"><span class="label">Discord webhook URL</span><input id="s-discord" type="url" placeholder="https://discord.com/api/webhooks/..."></label>
+          <label class="field"><span class="label">Progress update every N minutes (0 = only events)</span><input id="s-interval" type="number" min="0" max="1440"></label>
+          <label class="check"><input type="checkbox" id="s-snap"> Attach a camera picture</label>
+          <label class="check"><input type="checkbox" id="s-start"> Print started</label>
+          <label class="check"><input type="checkbox" id="s-complete"> Print finished / cancelled</label>
+          <label class="check"><input type="checkbox" id="s-pause"> Print paused</label>
+          <label class="check"><input type="checkbox" id="s-error"> Printer error</label>
+          <div class="row gap"><button class="btn" type="button" id="btn-test-discord">Send test message</button></div>
+        </div>
+        <div class="card">
+          <h2>Spoolman</h2>
+          <label class="field"><span class="label">Spoolman server URL (optional)</span><input id="s-spoolman" type="url" placeholder="http://192.168.1.10:7912"></label>
+          <p class="hint">Mainsail then shows the Spoolman panel and filament use is deducted from the active spool when a print ends.</p>
+          <div class="row gap"><button class="btn" type="button" id="btn-test-spoolman">Test</button></div>
+        </div>
+        <div class="sticky-save"><button class="btn primary big" type="submit">Save settings</button></div>
+      </form>
+    </section>
+
+    <!-- SYSTEM -->
+    <section class="page" id="page-system">
+      <div class="card">
+        <h2>About this board</h2>
+        <div id="sys-info" class="kv"></div>
+      </div>
+      <div class="card">
+        <h2>Setup page password</h2>
+        <p class="muted">Optional. Anyone on your home network can open this page unless you set a password. (Mainsail itself is not affected.)</p>
+        <form id="pw-form" class="row gap wrap">
+          <input id="pw-input" type="password" placeholder="New password (empty = no password)" autocomplete="new-password">
+          <button class="btn" type="submit">Save password</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Power</h2>
+        <div class="row gap wrap">
+          <button class="btn" id="btn-reboot">Restart board</button>
+          <button class="btn danger" id="btn-shutdown">Shut down</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row between"><h2>Log</h2><button class="btn tiny" id="btn-logs">Refresh</button></div>
+        <pre id="logs" class="logs"></pre>
+      </div>
+    </section>
+  </main>
+
+  <!-- Printer editor -->
+  <dialog id="printer-dialog">
+    <form id="printer-form" method="dialog" class="stack">
+      <h2 id="pd-title">Add printer</h2>
+      <input type="hidden" id="pd-id">
+      <label class="field"><span class="label">Pairing code</span><input id="pd-code" autocomplete="off" placeholder="8 characters shown on the printer" maxlength="32"><span class="hint">Printer screen: Settings → Network → LAN-only mode.</span></label>
+      <label class="field"><span class="label">Printer IP address</span><input id="pd-ip" inputmode="decimal" placeholder="192.168.1.50" required></label>
+      <label class="field"><span class="label">Name</span><input id="pd-name" placeholder="My Creator 5"></label>
+      <details>
+        <summary>More options</summary>
+        <label class="field"><span class="label">Serial number</span><input id="pd-serial" placeholder="Found automatically by the scan"></label>
+        <label class="field"><span class="label">Mainsail / OrcaSlicer port on this board</span><input id="pd-port" type="number" min="1024" max="65535"></label>
+        <label class="field"><span class="label">Camera URL override (MJPEG, optional)</span><input id="pd-camera" placeholder="Leave empty to use the printer's camera"></label>
+        <label class="check"><input type="checkbox" id="pd-level"> Auto bed leveling before each print</label>
+        <label class="check"><input type="checkbox" id="pd-enabled" checked> Enabled</label>
+      </details>
+      <div id="pd-msg" class="notice hidden"></div>
+      <div class="row gap wrap end">
+        <button class="btn" type="button" id="pd-cancel">Cancel</button>
+        <button class="btn" type="button" id="pd-test">Test connection</button>
+        <button class="btn primary" type="button" id="pd-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>
