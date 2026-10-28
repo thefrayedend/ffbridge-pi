@@ -136,7 +136,9 @@ function renderHome() {
     if (p.bed) t.push(`Bed <b>${tempStr(p.bed)}</b>`);
     if (p.chamber) t.push(`Chamber <b>${tempStr(p.chamber)}</b>`);
     $('.temps', el).innerHTML = t.join('');
-    $('.hp-msg', el).textContent = p.error || p.uploadStatus || '';
+    $('.hp-msg', el).textContent = p.waitingForSlots
+      ? `${p.waitingForSlots} is waiting: choose the filament slots in Mainsail's pop-up, then press Start print.`
+      : (p.error || p.uploadStatus || '');
     $('.hp-mainsail', el).href = p.mainsailUrl;
     // camera: refresh a still picture every 5 s while the page is visible
     if (p.hasCamera && !camTimers[p.id]) {
@@ -491,6 +493,7 @@ async function loadSettings() {
   $('#s-pause').checked = s.notifyOnPause;
   $('#s-error').checked = s.notifyOnError;
   $('#s-spoolman').value = s.spoolmanUrl || '';
+  $$('input[name=s-map]').forEach((r) => { r.checked = r.value === (s.mappingMode || 'auto'); });
 }
 $('#settings-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -505,6 +508,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
       notifyOnPause: $('#s-pause').checked,
       notifyOnError: $('#s-error').checked,
       spoolmanUrl: $('#s-spoolman').value.trim(),
+      mappingMode: ($('input[name=s-map]:checked') || {}).value || 'auto',
     },
   });
   toast(r.ok ? 'Settings saved' : (r.message || 'Could not save'), !r.ok);
