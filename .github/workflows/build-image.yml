@@ -38,6 +38,7 @@ jobs:
         run: |
           dart pub get
           dart run test/prediction_check.dart
+          dart run test/mapping_check.dart
           dart compile exe bin/pibridge.dart -o "$GITHUB_WORKSPACE/pibridge"
 
       - name: Install image tools
