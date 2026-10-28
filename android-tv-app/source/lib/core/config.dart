@@ -63,6 +63,10 @@ class AppConfig {
   bool discordSnapshot = true;
   bool notifyOnComplete = true, notifyOnError = true, notifyOnPause = true, notifyOnStart = true;
 
+  /// Multi-colour jobs: 'auto' = start right away when every filament matches a loaded spool,
+  /// otherwise ask in Mainsail; 'always' = always ask before starting.
+  String mappingMode = 'auto';
+
   AppConfig(String dataDir) : _file = File('$dataDir/ffbridge.json') {
     load();
   }
@@ -79,6 +83,7 @@ class AppConfig {
       notifyOnError = j['notifyOnError'] ?? true;
       notifyOnPause = j['notifyOnPause'] ?? true;
       notifyOnStart = j['notifyOnStart'] ?? true;
+      mappingMode = j['mappingMode'] == 'always' ? 'always' : 'auto';
     } catch (_) {}
   }
 
@@ -92,6 +97,7 @@ class AppConfig {
         'notifyOnError': notifyOnError,
         'notifyOnPause': notifyOnPause,
         'notifyOnStart': notifyOnStart,
+        'mappingMode': mappingMode,
       };
 
   void save() {
