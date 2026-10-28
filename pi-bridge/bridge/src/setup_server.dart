@@ -324,6 +324,7 @@ class SetupServer {
       'hasCamera': b?.hasCamera ?? false,
       'firmware': b?.client.firmware ?? '',
       'uploadStatus': b?.uploadStatus ?? '',
+      'waitingForSlots': b?.pendingMapping?.file,
       'ai': ai.stateFor(c.id).toJson(),
       'aiEnabled': pi.ai.enabledFor(c.id),
     };
@@ -431,6 +432,7 @@ class SetupServer {
       'notifyOnComplete': c.notifyOnComplete,
       'notifyOnPause': c.notifyOnPause,
       'notifyOnError': c.notifyOnError,
+      'mappingMode': c.mappingMode,
     };
   }
 
@@ -439,6 +441,7 @@ class SetupServer {
     final oldInterval = c.discordIntervalMinutes;
     if (b['spoolmanUrl'] is String) c.spoolmanUrl = (b['spoolmanUrl'] as String).trim();
     if (b['discordWebhook'] is String) c.discordWebhook = (b['discordWebhook'] as String).trim();
+    if (b['mappingMode'] == 'auto' || b['mappingMode'] == 'always') c.mappingMode = b['mappingMode'];
     if (b['discordIntervalMinutes'] is num) c.discordIntervalMinutes = (b['discordIntervalMinutes'] as num).toInt().clamp(0, 1440);
     for (final k in ['discordSnapshot', 'notifyOnStart', 'notifyOnComplete', 'notifyOnPause', 'notifyOnError']) {
       if (b[k] is! bool) continue;
