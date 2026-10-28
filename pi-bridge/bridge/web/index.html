@@ -150,6 +150,13 @@
           <div class="row gap"><button class="btn" type="button" id="btn-test-discord">Send test message</button></div>
         </div>
         <div class="card">
+          <h2>Multi-colour prints (AD5X / Creator 5)</h2>
+          <p class="muted">When a multi-colour .3mf is sent through the bridge (OrcaSlicer "Print" or Mainsail), each slicer filament is matched to the loaded spool with the same material and closest colour.</p>
+          <label class="check"><input type="radio" name="s-map" value="auto"> Start right away when every colour matches; ask me when something doesn't</label>
+          <label class="check"><input type="radio" name="s-map" value="always"> Always ask me before starting</label>
+          <p class="hint">"Ask" opens a pop-up in Mainsail (and in OrcaSlicer's Device tab) with a button per slot for each filament, then Start print.</p>
+        </div>
+        <div class="card">
           <h2>Spoolman</h2>
           <label class="field"><span class="label">Spoolman server URL (optional)</span><input id="s-spoolman" type="url" placeholder="http://192.168.1.10:7912"></label>
           <p class="hint">Mainsail then shows the Spoolman panel and filament use is deducted from the active spool when a print ends.</p>
