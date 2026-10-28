@@ -58,6 +58,10 @@ const gcodeHelp = {
   'FILTRATION': 'MODE=off|internal|external',
   'SET_MATERIAL_SLOT': 'SLOT=1-4 MATERIAL=PLA COLOR=RRGGBB',
   'LEVEL_BEFORE_PRINT': 'ENABLE=1|0',
+  'FFB_MAP_SLOT': 'Multi-colour print waiting: FILAMENT=1-4 SLOT=1-4',
+  'FFB_MAP_START': 'Start the waiting multi-colour print',
+  'FFB_MAP_CANCEL': 'Cancel the waiting multi-colour print',
+  'FFB_MAPPING_MODE': 'MODE=auto (start when colours match) | always (always ask)',
   'REFRESH_FILES': 'Reload printer file list',
   'STATUS': 'Show printer status',
   'HELP': 'List commands',
@@ -211,6 +215,20 @@ class GcodeRunner {
         if (!(c.isCreator5 || c.isAD5X)) throw RpcError(400, 'This printer has no material station');
         _ok(await c.configureSlot(slot, mat, col), 'material slot');
         b.gcodeResponse('// Slot $slot set to $mat #${col.replaceAll('#', '')}');
+      case 'FFB_MAP_SLOT':
+        b.setPendingSlot(int.tryParse(g.params['FILAMENT'] ?? '') ?? 0, int.tryParse(g.params['SLOT'] ?? '') ?? 0);
+      case 'FFB_MAP_START':
+        await b.confirmPendingPrint();
+      case 'FFB_MAP_CANCEL':
+        b.cancelPendingPrint();
+      case 'FFB_MAPPING_MODE':
+        final mode = (g.params['MODE'] ?? '').toLowerCase();
+        if (mode != 'auto' && mode != 'always') throw RpcError(400, 'MODE=auto or MODE=always');
+        b.app.mappingMode = mode;
+        b.app.save();
+        b.gcodeResponse(mode == 'always'
+            ? '// Multi-colour prints: always ask which slot to use'
+            : '// Multi-colour prints: start automatically when the loaded colours match, otherwise ask');
       case 'LEVEL_BEFORE_PRINT':
         final en = (g.num('ENABLE') ?? 1) > 0;
         b.cfg.levelBeforePrint = en;
