@@ -13,6 +13,7 @@ import 'gcode.dart';
 import 'ff/ff_client.dart';
 import 'ff/models.dart';
 import 'log.dart';
+import 'mapping.dart';
 import 'moonraker/database.dart';
 import 'moonraker/file_manager.dart';
 import 'moonraker/history.dart';
@@ -248,6 +249,7 @@ class PrinterBridge {
   void _onJobTransition(String from, String to, PrinterDetail d) {
     final fname = d.printFileName;
     if ((to == 'printing' || to == 'paused') && (from != 'printing' && from != 'paused' || fname != jobFile)) {
+      _clearPending();
       jobFile = fname;
       _jobStart = DateTime.now();
       final cur = history.current;
@@ -441,7 +443,25 @@ class PrinterBridge {
     final name = filename.split('/').last;
     final local = files.fileFor('gcodes', filename);
     final onPrinter = files.printerFiles.containsKey(name);
-    mappings ??= defaultMappings(filename);
+    if (mappings == null) {
+      final plan = smartMapping(filename);
+      if (plan != null) {
+        if (app.mappingMode == 'always' || !plan.confident) {
+          // Hold the job and ask in Mainsail (also shown in OrcaSlicer's Device tab).
+          if (local.existsSync() && !onPrinter) await uploadToPrinter(local, name, printNow: false);
+          _pendingMapping = plan;
+          _pendingFile = filename;
+          gcodeResponse(plan.confident
+              ? '// $name is waiting: check the filament slots in the pop-up, then press Start print'
+              : '!! $name: the loaded filaments don\'t match the slicer file. Choose the slots in the pop-up, then press Start print.');
+          showMappingPrompt();
+          _changes.add(null);
+          return;
+        }
+        mappings = plan.toMappings();
+        _logMapping(plan);
+      }
+    }
     if (local.existsSync() && !onPrinter) {
       await uploadToPrinter(local, name, printNow: false);
     }
@@ -471,25 +491,95 @@ class PrinterBridge {
     Future.delayed(const Duration(milliseconds: 1500), poll);
   }
 
-  /// Identity mapping (slicer filament N -> slot/toolhead N) using the colours/materials
-  /// currently configured on the printer. Only used for .3mf jobs on material-station printers.
-  List<MaterialMapping>? defaultMappings(String filename) {
+  // --------------- multi-colour filament mapping ---------------
+  MappingPlan? _pendingMapping;
+  String _pendingFile = '';
+  MappingPlan? get pendingMapping => _pendingMapping;
+
+  /// Smart slicer-filament -> slot plan for .3mf jobs on material-station printers (null = nothing to map).
+  MappingPlan? smartMapping(String filename) {
     if (!filename.toLowerCase().endsWith('.3mf')) return null;
     if (!(client.isCreator5 || client.isAD5X)) return null;
     final meta = files.metadataFor(filename) ?? {};
     final fils = (meta['mmu_filaments'] as List?) ?? const [];
     final slots = client.last?.slots ?? const <SlotInfo>[];
     if (fils.isEmpty || slots.isEmpty) return null;
-    final out = <MaterialMapping>[];
+    final list = <SlicerFilament>[];
     for (var i = 0; i < fils.length && i < 4; i++) {
       final f = fils[i] as Map;
-      final toolId = ((f['id'] as int?) ?? (i + 1)) - 1;
-      final slot = slots.firstWhere((s) => s.slotId == toolId + 1, orElse: () => slots[i % slots.length]);
-      final toolColor = normalizeHex(f['color']?.toString() ?? '');
-      out.add(MaterialMapping(toolId.clamp(0, 3), slot.slotId, (f['type']?.toString() ?? '').isEmpty ? (slot.materialName.isEmpty ? 'PLA' : slot.materialName) : f['type'].toString(),
-          toolColor.isEmpty ? '#FFFFFF' : toolColor, slot.materialColor.isEmpty ? '#FFFFFF' : slot.materialColor));
+      final c = normalizeColor(f['color']?.toString() ?? '');
+      list.add(SlicerFilament(((f['id'] as int?) ?? (i + 1)) - 1, f['type']?.toString() ?? '', c.isEmpty ? '#FFFFFF' : c));
     }
-    return out;
+    return planMapping(filename.split('/').last, list, slots);
+  }
+
+  /// Kept for callers of the old API: the smart plan as printer mappings.
+  List<MaterialMapping>? defaultMappings(String filename) => smartMapping(filename)?.toMappings();
+
+  String _desc(String color, String material) => '${colorName(color)} ${material.isEmpty ? 'filament' : material}';
+
+  void _logMapping(MappingPlan plan) {
+    for (final l in plan.lines) {
+      gcodeResponse('// Filament ${l.filament.index + 1} (${_desc(l.filament.color, l.filament.type)}) -> slot ${l.slot.slotId} '
+          '(${_desc(l.slot.color, l.slot.material)}): ${l.verdict}');
+    }
+  }
+
+  void _action(String a) => gcodeResponse('// action:$a');
+
+  /// Mainsail "macro prompt" dialog: one row of slot buttons per slicer filament.
+  void showMappingPrompt() {
+    final p = _pendingMapping;
+    if (p == null) return;
+    _action('prompt_begin Choose filament slots');
+    _action('prompt_text ${p.file} uses ${p.lines.length} filament${p.lines.length == 1 ? '' : 's'}. '
+        '${p.confident ? 'Everything matches - check and press Start print.' : 'Not everything matches what is loaded. Pick a slot for each filament.'}');
+    for (final l in p.lines) {
+      final n = l.filament.index + 1;
+      _action('prompt_text Filament $n: ${_desc(l.filament.color, l.filament.type)} (${l.filament.color}) -> slot ${l.slot.slotId} = '
+          '${_desc(l.slot.color, l.slot.material)} - ${l.verdict}');
+      _action('prompt_button_group_start');
+      for (final s in p.slots) {
+        final on = s.slotId == l.slot.slotId;
+        _action('prompt_button ${on ? '> ' : ''}Slot ${s.slotId}: ${_desc(s.color, s.material)}|FFB_MAP_SLOT FILAMENT=$n SLOT=${s.slotId}|${on ? 'primary' : 'secondary'}');
+      }
+      _action('prompt_button_group_end');
+    }
+    _action('prompt_footer_button Cancel|FFB_MAP_CANCEL|error');
+    _action('prompt_footer_button Start print|FFB_MAP_START|primary');
+    _action('prompt_show');
+  }
+
+  void setPendingSlot(int filamentNumber, int slotId) {
+    final p = _pendingMapping;
+    if (p == null) throw RpcError(400, 'No print is waiting for filament slots');
+    try {
+      p.setSlot(filamentNumber - 1, slotId);
+    } on ArgumentError catch (e) {
+      throw RpcError(400, e.message.toString());
+    }
+    showMappingPrompt();
+  }
+
+  Future<void> confirmPendingPrint() async {
+    final p = _pendingMapping;
+    if (p == null) throw RpcError(400, 'No print is waiting for filament slots');
+    _clearPending();
+    _logMapping(p);
+    await startPrint(_pendingFile, mappings: p.toMappings());
+  }
+
+  void cancelPendingPrint() {
+    if (_pendingMapping == null) return;
+    gcodeResponse('// Print of ${_pendingMapping!.file} cancelled');
+    _clearPending();
+  }
+
+  void _clearPending() {
+    if (_pendingMapping == null) return;
+    _pendingMapping = null;
+    _action('prompt_end');
+    _changes.add(null);
   }
 
   Future<void> uploadToPrinter(File f, String name, {bool printNow = false, List<MaterialMapping>? mappings}) async {
