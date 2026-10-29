@@ -225,6 +225,17 @@ function setCamera(force = false) {
   $('#cam-empty').classList.add('hidden');
 }
 function stopCamera() { cam.removeAttribute('src'); cam.dataset.src = ''; }
+// Size the camera box to the camera's real picture shape (no black bars). Camera streams don't
+// reliably fire 'load', so check the picture size a few times a second until it is known.
+function applyCamShape(ar) { if (ar > 0.3 && ar < 4) $('#camera').style.setProperty('--cam-ar', ar.toFixed(4)); }
+try { applyCamShape(parseFloat(localStorage.getItem('ffb-cam-ar'))); } catch (_) {}
+setInterval(() => {
+  if (!cam.dataset.src || !cam.naturalWidth || !cam.naturalHeight) return;
+  const ar = cam.naturalWidth / cam.naturalHeight;
+  if ($('#camera').style.getPropertyValue('--cam-ar') === ar.toFixed(4)) return;
+  applyCamShape(ar);
+  try { localStorage.setItem('ffb-cam-ar', ar.toFixed(4)); } catch (_) {}
+}, 400);
 cam.addEventListener('error', () => {
   if (!cam.dataset.src) return;
   cam.dataset.src = '';

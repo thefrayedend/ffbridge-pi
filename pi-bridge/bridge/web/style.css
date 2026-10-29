@@ -161,13 +161,17 @@ input[type=checkbox], input[type=radio] { width: auto; }
 .welcome p { color: var(--muted); margin: 0 0 20px; }
 
 /* ------------------------------------------------------------ printer view */
-.printer-view { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
-@media (max-width: 1000px) { .printer-view { grid-template-columns: minmax(0, 1fr); } }
+.printer-view { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 30vw, 380px); gap: 16px; align-items: start; }
+@media (max-width: 760px) { .printer-view { grid-template-columns: minmax(0, 1fr); } }
 .camera {
-  position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius); overflow: hidden; margin-bottom: 14px;
+  /* The box takes the camera's own shape (set from the picture in app.js), so there are no black bars.
+     It is also kept short enough that the job card below stays on screen. */
+  --cam-ar: 1.333;
+  position: relative; aspect-ratio: var(--cam-ar); background: #000; border-radius: var(--radius); overflow: hidden; margin: 0 auto 14px;
+  width: min(100%, calc((100vh - 230px) * var(--cam-ar))); min-width: min(100%, 320px);
 }
 .camera img { width: 100%; height: 100%; object-fit: contain; display: block; }
-.camera:fullscreen { border-radius: 0; }
+.camera:fullscreen { border-radius: 0; width: 100%; aspect-ratio: auto; }
 .cam-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 10px; color: #aaa; }
 .cam-top, .cam-bottom { position: absolute; left: 12px; right: 12px; display: flex; justify-content: space-between; gap: 8px; pointer-events: none; }
 .cam-top { top: 12px; } .cam-bottom { bottom: 12px; justify-content: flex-end; }
