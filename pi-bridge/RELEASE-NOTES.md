@@ -19,6 +19,7 @@ setup page, Spoolman, Discord, and AI print-failure detection (Obico model, runs
 
 ## What's new
 
-- One-click updates from the printer screen (Advanced → System → Updates). If a new version doesn't start, the board goes back to the old one by itself.
-- Settings backup: download it from Advanced → System, and the board also keeps a copy on the SD card's FFBRIDGE drive. A freshly flashed card restores it automatically.
-- Printer errors are shown in plain English with what to do and a link to FlashForge's repair guide.
+- Screen layout settings (Settings → General → Screen layout): camera size, side panel right/left/below, where the print status card sits, and an option to keep the whole camera picture on screen. Saved per browser. The side panel now stays beside the camera on normal-width screens.
+- Printer network (Settings → Advanced → Printer network, off by default): the board's Wi-Fi becomes a private network for your printers while the board joins your home network by cable. Printers are cut off from the internet; you can allow internet for 1 or 4 hours (e.g. for a firmware update) and it switches itself off again. The board also gives the printers the time.
+- Printers that get a new network address are found again by themselves (no more re-entering the IP address).
+- Fixed: the bridge could crash when a printer was edited or removed while it was still trying to connect.
