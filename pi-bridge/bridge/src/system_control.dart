@@ -46,6 +46,12 @@ class SystemControl {
   Future<Map<String, dynamic>> restartAi() => _run(['restart-ai']);
   Future<Map<String, dynamic>> updateStart(String baseUrl) => _run(['update-start', baseUrl]);
   Future<Map<String, dynamic>> systemInfo() => _run(['system-info']);
+  // Printer network (router mode): the board's Wi-Fi becomes a private network for the printers.
+  Future<Map<String, dynamic>> printerNetStatus() => _run(['printernet-status']);
+  Future<Map<String, dynamic>> printerNetEnable(String ssid, String password) =>
+      _run(['printernet-enable', ssid], stdinText: password, timeout: const Duration(seconds: 60));
+  Future<Map<String, dynamic>> printerNetDisable() => _run(['printernet-disable'], timeout: const Duration(seconds: 90));
+  Future<Map<String, dynamic>> printerNetInternet(int minutes) => _run(['printernet-internet', '$minutes']);
 
   /// Local IPv4 addresses (ethernet / wifi first).
   static Future<List<String>> localIps() async {

@@ -243,6 +243,20 @@ class SetupServer {
 
       // network
       if (p == 'network' && m == 'GET') return await _json(req, await sys.networkStatus());
+      if (p == 'printer-network' && m == 'GET') return await _json(req, await sys.printerNetStatus());
+      if (p == 'printer-network' && m == 'POST') {
+        final b = await _body(req);
+        switch (b['action']) {
+          case 'enable':
+            return await _json(req, await sys.printerNetEnable('${b['ssid'] ?? ''}'.trim(), '${b['password'] ?? ''}'));
+          case 'disable':
+            return await _json(req, await sys.printerNetDisable());
+          case 'internet':
+            final mins = b['minutes'] is num ? (b['minutes'] as num).toInt() : int.tryParse('${b['minutes']}') ?? 0;
+            return await _json(req, await sys.printerNetInternet(mins.clamp(-1, 24 * 60)));
+        }
+        return await _json(req, {'ok': false, 'message': 'Unknown action.'}, status: 400);
+      }
       if (p == 'network/scan' && m == 'POST') return await _json(req, await sys.wifiScan());
       if (p == 'network/connect' && m == 'POST') {
         final b = await _body(req);
@@ -337,7 +351,7 @@ class SetupServer {
       _ipsAt = DateTime.now();
       SystemControl.localIps().then((v) => _ips = v);
     }
-    final lan = _ips.where((ip) => !ip.startsWith('10.42.') && !ip.startsWith('169.254.') && !ip.startsWith('172.17.')).toList();
+    final lan = _ips.where((ip) => !ip.startsWith('10.42.') && !ip.startsWith('10.43.') && !ip.startsWith('169.254.') && !ip.startsWith('172.17.')).toList();
     return lan.isNotEmpty ? lan.first : _hostFor(req);
   }
 
