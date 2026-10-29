@@ -39,6 +39,7 @@ jobs:
           dart pub get
           dart run test/prediction_check.dart
           dart run test/mapping_check.dart
+          python3 ../image/test/wifi_status_check.py
           dart compile exe bin/pibridge.dart -o "$GITHUB_WORKSPACE/pibridge"
 
       - name: Install image tools
