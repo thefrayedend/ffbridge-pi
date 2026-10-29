@@ -284,10 +284,29 @@ class PrinterBridge {
       gcodeResponse('// Print ${status == 'completed' ? 'finished' : status}: $jobFile');
       _trackSpool(progress);
       if (to == 'error' ? app.notifyOnError : app.notifyOnComplete) _notifyDiscord(status);
+      if (cfg.autoClearPlatform && (to == 'complete' || to == 'cancelled')) _scheduleAutoClear(to);
     } else if (from == 'standby' && history.current != null && (to == 'complete' || to == 'cancelled' || to == 'error')) {
       // job finished while the bridge was not running
       history.finish(to == 'complete' ? 'completed' : to, printDuration: d.printDuration, filamentUsed: _filamentUsed(d.printProgress));
     }
+  }
+
+  /// FlashForge printers show a "print finished" message that blocks the next print until
+  /// "clear platform" is sent. With the printer option on, the bridge sends it by itself a few
+  /// seconds after a print ends (after the Discord picture of the finished print is taken).
+  void _scheduleAutoClear(String endedAs) {
+    Timer(const Duration(seconds: 8), () async {
+      if (_disposed || !online || jobState != endedAs) return; // already cleared, or a new job started
+      try {
+        if (await client.clearPlatform()) {
+          gcodeResponse('// Cleared the platform automatically (printer option "auto clear platform")');
+          log.info('${cfg.name}: platform cleared automatically after the print ${endedAs == 'complete' ? 'finished' : 'was cancelled'}');
+        }
+      } catch (e) {
+        log.warn('${cfg.name}: automatic clear platform failed: $e');
+      }
+      Future.delayed(const Duration(seconds: 1), poll);
+    });
   }
 
   double _filamentUsed(double progress) {
