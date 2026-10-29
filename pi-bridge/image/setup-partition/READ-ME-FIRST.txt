@@ -28,6 +28,10 @@ On a phone, tablet or computer on the same Wi-Fi, open:
     http://ffbridge.local
 
 Doesn't open?
+ * Turn the board off, put the SD card back in your computer and open
+   WIFI-STATUS.txt on it. It says whether the board got online and, if not,
+   exactly why (for example "wrong password" or "can't see a network called ...")
+   and what to change. It also lists the Wi-Fi networks the board can see.
  * Wait one more minute and try again.
  * Look in your router's app for a device called "ffbridge" and open its address,
    e.g. http://192.168.1.57
