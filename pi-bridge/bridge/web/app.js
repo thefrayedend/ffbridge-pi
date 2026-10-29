@@ -103,7 +103,7 @@ function route() {
       if (state.sub === 'printers') renderPrinterList();
       if (state.sub === 'ai') loadAi();
       if (state.sub === 'mainsail') renderMainsail();
-      if (state.sub === 'system') { loadSystem(); loadLogs(); }
+      if (state.sub === 'system') { loadSystem(); loadLogs(); loadUpdate(); }
     }
   }
   window.scrollTo(0, 0);
@@ -145,6 +145,7 @@ async function refreshStatus() {
     if (!s.printers) return;
     state.status = s;
     renderTabs();
+    $('#update-dot').classList.toggle('hidden', !(s.update && s.update.available));
     if (state.view === 'home') renderHome();
     if (state.view === 'settings' && state.tab === 'advanced') {
       if (state.sub === 'printers') renderPrinterList(false);
@@ -268,6 +269,13 @@ function renderHome() {
     $('#pending-text').textContent = `${prettyName(pend.file)} is waiting: check which filament goes in which slot.`;
     const key = p.id + '|' + pend.file;
     if (state.pendingSeen !== key && !$('#print-dialog').open) { state.pendingSeen = key; openPending(p); }
+  }
+  const pe = p.online && p.error;
+  $('#err-banner').classList.toggle('hidden', !pe);
+  if (pe) {
+    $('#err-title').textContent = `Printer error ${pe.code}: ${pe.title}`;
+    $('#err-fix').textContent = pe.fix;
+    $('#err-link').href = pe.wikiUrl;
   }
   const a = p.ai || {};
   const alarm = p.aiEnabled && (a.status === 'warning' || a.status === 'paused');
@@ -1033,6 +1041,72 @@ async function loadSystem() {
   }
   $('#sys-info').innerHTML = rows.map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v)}</div>`).join('');
 }
+// ---------------------------------------------------------------- updates
+async function loadUpdate(after) {
+  const u = await api('update');
+  const box = $('#update-box');
+  const inst = u.install || {};
+  const busy = ['starting', 'downloading', 'installing', 'rolling-back'].includes(inst.state);
+  let h = `<div class="kv"><div>This version</div><div>${esc(u.current)}</div>`;
+  if (u.latest) h += `<div>Newest version</div><div>${esc(u.latest)}${u.built ? ' (' + esc(u.built) + ')' : ''}</div>`;
+  if (u.checkedAt) h += `<div>Last checked</div><div>${new Date(u.checkedAt).toLocaleString()}</div>`;
+  h += '</div>';
+  if (!u.configured) h += '<p class="hint">This copy was built without an update source (local test build).</p>';
+  else if (busy) h += `<div class="notice">${esc(inst.message || 'Updating…')} The page reloads when it's done.</div>`;
+  else if (u.available && u.imageRequired) {
+    h += `<div class="notice warn">Version ${esc(u.latest)} changes system parts, so it needs a new SD card image. Download your backup below first, then flash the <a href="${esc(u.imageUrl)}" target="_blank" rel="noopener">latest image</a>.</div>`;
+  } else if (u.available) {
+    h += `<div class="notice ok"><b>Version ${esc(u.latest)} is available.</b>${u.notes ? '<div class="update-notes">' + esc(u.notes) + '</div>' : ''}</div>
+      <div class="row gap"><button class="btn primary" id="btn-update-install">Install update</button></div>
+      <p class="hint">Takes about a minute; prints keep running. If the new version doesn't start, the board goes back to this one by itself.</p>`;
+  } else if (u.checkError) h += `<p class="hint">${esc(u.checkError)}</p>`;
+  else if (u.latest) h += '<p class="hint">You have the newest version.</p>';
+  if (!busy && inst.state && ['failed', 'rolled-back', 'image-required'].includes(inst.state)) h += `<div class="notice warn">Last update: ${esc(inst.message)}</div>`;
+  if (!busy && inst.state === 'done' && after) h += `<div class="notice ok">${esc(inst.message)}</div>`;
+  box.innerHTML = h;
+  if (busy) setTimeout(() => waitForUpdate(u.current), 3000);
+}
+async function waitForUpdate(oldVersion) {
+  try {
+    const u = await api('update');
+    const st = (u.install || {}).state;
+    if (u.current !== oldVersion || ['done', 'failed', 'rolled-back', 'image-required'].includes(st)) { location.reload(); return; }
+    if (state.view === 'settings' && state.sub === 'system') loadUpdate();
+    else setTimeout(() => waitForUpdate(oldVersion), 3000);
+  } catch (_) { setTimeout(() => waitForUpdate(oldVersion), 3000); } // bridge restarting
+}
+$('#btn-update-check').addEventListener('click', async (e) => {
+  e.target.disabled = true; e.target.textContent = 'Checking…';
+  await api('update/check', { method: 'POST' });
+  e.target.disabled = false; e.target.textContent = 'Check now';
+  loadUpdate();
+});
+$('#update-box').addEventListener('click', async (e) => {
+  if (!e.target.closest('#btn-update-install')) return;
+  if (!(await confirmBox('Install the update?', 'The bridge restarts for about a minute. Running prints are not affected.', 'Install'))) return;
+  const r = await api('update/install', { method: 'POST' });
+  if (!r.ok) { toast(r.message || 'Could not start the update.', true); return; }
+  toast('Updating… the page reloads when it\'s done.');
+  setTimeout(() => loadUpdate(), 1500);
+});
+
+// ---------------------------------------------------------------- backup
+$('#restore-file').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  if (!(await confirmBox('Restore these settings?', `Your current printers and settings are replaced with the ones in ${f.name}. The bridge restarts.`, 'Restore'))) return;
+  const msg = $('#restore-msg');
+  notice(msg, 'Restoring…');
+  let r = {};
+  try {
+    const res = await fetch('/api/backup/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: await f.text() });
+    r = await res.json();
+  } catch (_) { r = { ok: false, message: 'Could not reach the board.' }; }
+  notice(msg, r.message || (r.ok ? 'Restored.' : 'Restore failed.'), r.ok ? 'ok' : 'err');
+  if (r.ok && r.restarting) setTimeout(() => location.reload(), 8000);
+});
+
 async function loadLogs() {
   const r = await api('logs');
   const pre = $('#logs');

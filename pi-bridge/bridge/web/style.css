@@ -351,3 +351,10 @@ dialog.small-dialog { width: min(400px, calc(100% - 24px)); }
   .printer-tabs.multi > button { display: none; }
   .printer-tabs.multi .printer-select { display: flex; }
 }
+
+.err-text { flex: 1; min-width: 220px; font-weight: 400; }
+.err-text b { display: block; margin-bottom: 2px; }
+
+#btn-settings { position: relative; }
+.badge { position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--err); border: 2px solid var(--panel); }
+.update-notes { white-space: pre-wrap; font-weight: 400; margin-top: 6px; font-size: 13px; }
