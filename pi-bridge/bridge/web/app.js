@@ -428,6 +428,10 @@ async function loadNetwork(scan) {
   if (n.hostname) { kv.push(['Board name', n.hostname + '.local']); $('#hn-current').textContent = n.hostname; $('#hn-input').placeholder = n.hostname; }
   if (n.ethernet) kv.push(['Ethernet', n.ethernet.connected ? `Connected · ${n.ethernet.ip}` : 'Not plugged in']);
   if (n.wifi) kv.push(['Wi-Fi', n.wifi.connected ? `${n.wifi.ssid} · ${n.wifi.ip}${n.wifi.signal ? ' · signal ' + n.wifi.signal + '%' : ''}` : (n.wifi.present === false ? 'No Wi-Fi hardware found' : 'Not connected')]);
+  if (n.wifi && !n.wifi.connected && n.wifi.problem) {
+    kv.push([`Saved Wi-Fi "${n.wifi.savedSsid}"`, n.wifi.problem]);
+    kv.push(['What to do', n.wifi.fix || '']);
+  }
   if (n.hotspot && n.hotspot.active) kv.push(['Setup hotspot', `On: "${n.hotspot.ssid}" (password ${n.hotspot.password})`]);
   $('#net-status').innerHTML = kv.map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v)}</div>`).join('');
   if (scan) wifiScan();
@@ -459,7 +463,8 @@ $('#wifi-form').addEventListener('submit', async (e) => {
   msg.classList.remove('hidden');
   const hotspot = (state.status?.ips || []).some((ip) => ip.startsWith('10.42.'));
   notice(msg, hotspot
-    ? 'Joining your Wi-Fi… Your phone will lose this hotspot now. Reconnect your phone to your home Wi-Fi, then open http://' + (state.status?.hostname || 'ffbridge') + '.local'
+    ? 'Joining your Wi-Fi… Your phone will lose this hotspot now. Reconnect your phone to your home Wi-Fi, then open http://' + (state.status?.hostname || 'ffbridge') + '.local' +
+      ' — If the "' + (state.status?.hotspot?.ssid || 'FlashForge-Bridge') + '" hotspot comes back after about a minute, the Wi-Fi details were wrong: connect to it again and this page shows what went wrong.'
     : 'Connecting… this can take up to a minute.');
   let r;
   try {
