@@ -11,6 +11,7 @@ import 'dart:io';
 
 import '../src/ai_monitor.dart';
 import '../src/backup.dart';
+import '../src/printer_finder.dart';
 import '../src/boot_config.dart';
 import '../src/core.dart';
 import '../src/pi_config.dart';
@@ -70,6 +71,7 @@ Future<void> main(List<String> args) async {
   await setup.start();
   if (!args.contains('--no-ai')) ai.start();
   updater.start();
+  final finder = PrinterFinder(host)..start(); // follows printers that got a new network address
 
   BootConfig? boot;
   if (bootPartition.isNotEmpty) {
@@ -84,6 +86,7 @@ Future<void> main(List<String> args) async {
   Future<void> shutdown(ProcessSignal s) async {
     host.log.info('Stopping ($s)');
     ai.stop();
+    finder.stop();
     backup.flushNow(bootPartition);
     await setup.stop();
     await host.stopAll();
