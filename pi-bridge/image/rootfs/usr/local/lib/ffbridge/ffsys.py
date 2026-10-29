@@ -10,6 +10,8 @@ Sub-commands used by systemd units:
 Sub-commands used by the bridge's setup page (via `sudo ffbridge-helper <cmd>`), all print JSON:
   net-status | wifi-scan | wifi-connect <ssid> (password on stdin) | wifi-forget
   set-hostname <name> | reboot | shutdown | restart-ai | system-info
+  printernet-status | printernet-enable <ssid> (password on stdin) | printernet-disable
+  printernet-internet <minutes, 0 = block, -1 = until turned off>
 """
 import hashlib
 import json
@@ -243,6 +245,9 @@ def wifi_configure(ssid, password, hidden=False, connect=True, timeout=45):
         msg = "Could not save the Wi-Fi settings: " + (r.stderr or r.stdout).strip()
         save_wifi_error(ssid, "save", msg)
         return {"ok": False, "message": msg}
+    if printernet_state()["enabled"]:  # the Wi-Fi is busy as the printer network: keep the details for later
+        run(["nmcli", "connection", "modify", WIFI_CON, "connection.autoconnect", "no"])
+        return {"ok": True, "message": f"Wi-Fi \"{ssid}\" saved. It will be used when printer network mode is switched off."}
     if not connect:
         return {"ok": True, "message": f"Wi-Fi \"{ssid}\" saved."}
     was_hotspot = hotspot_active()
@@ -544,6 +549,8 @@ def hotspot_watch():
     never while a phone is connected to the hotspot: retrying switches the hotspot off for up to a
     minute, which would cut off someone who is using the setup page. Also keeps WIFI-STATUS.txt on
     the SD card up to date, so a beginner can see why the Wi-Fi didn't connect."""
+    if printernet_state()["enabled"]:
+        printernet_loop()   # returns when printer network mode is switched off
     write_status_file("Starting up / looking for your network...")
     for _ in range(90):
         if has_network():
@@ -556,6 +563,9 @@ def hotspot_watch():
         clients = 0
         try:
             now = time.time()
+            if printernet_state()["enabled"]:
+                printernet_loop()
+                continue
             if has_network():
                 if hotspot_active():
                     run(["nmcli", "connection", "down", HOTSPOT_CON])
@@ -593,6 +603,259 @@ def hotspot_watch():
         except Exception as e:  # noqa: BLE001
             log(f"hotspot-watch: {e}")
         time.sleep(15)
+
+
+# ----------------------------------------------------------------------------- printer network
+# "Printer network" (router mode, advanced, off by default): the board's Wi-Fi becomes a private
+# network just for the printers, and the board itself joins the home network by Ethernet.
+# The printers get no way out: IP forwarding is off and a firewall drops anything they send
+# through the board. Everything people use still works, because it all goes through the bridge
+# (printer screen, Mainsail, OrcaSlicer, camera, AI, Discord). Internet for the printers (firmware
+# updates) can be allowed for a limited time; it switches itself off again.
+# The board also serves the time (chrony) so the printers' clocks stay right without internet.
+PRINTERNET_FILE = os.path.join(STATE_DIR, "printer-network.json")
+PRINTERNET_CON = "ffbridge-printers"
+PRINTERNET_NET = "10.43.0"            # board = .1, printers get .50-.150 (setup hotspot uses 10.42.0.x)
+PRINTERNET_LEASES = "/run/ffbridge-printers.leases"   # readable by the bridge (shows connected printers)
+NFT_TABLE = "ffbridge_printers"
+
+
+def printernet_state():
+    try:
+        st = json.load(open(PRINTERNET_FILE))
+    except (OSError, ValueError):
+        st = {}
+    st.setdefault("enabled", False)
+    st.setdefault("ssid", "FFBridge-Printers")
+    st.setdefault("password", "")
+    st.setdefault("internetUntil", 0)       # epoch seconds; -1 = until turned off; 0 = off
+    return st
+
+
+def printernet_save(st):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = PRINTERNET_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+    os.chmod(tmp, 0o600)   # holds the Wi-Fi password
+    os.replace(tmp, PRINTERNET_FILE)
+
+
+def internet_allowed(st, now=None):
+    u = st.get("internetUntil", 0)
+    return u == -1 or (u > 0 and u > (now or time.time()))
+
+
+def ethernet_ip():
+    r = run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"])
+    for line in r.stdout.splitlines():
+        f = nm_fields(line)
+        if len(f) >= 3 and f[1] == "ethernet" and f[2].startswith("connected"):
+            ip = ipv4_of(f[0])
+            if ip and not ip.startswith("169.254."):
+                return ip
+    return ""
+
+
+def printernet_leases():
+    """Devices that got an address on the printer network (dnsmasq lease file)."""
+    out_ = []
+    try:
+        for line in open(PRINTERNET_LEASES):
+            p = line.split()
+            if len(p) >= 4:
+                out_.append({"ip": p[2], "mac": p[1], "name": "" if p[3] == "*" else p[3], "expires": int(p[0])})
+    except OSError:
+        pass
+    return out_
+
+
+def nft_rules(dev, allow):
+    """The firewall for the printer network. Printers may only talk to the board itself, unless
+    internet is allowed (then their traffic is passed on and NATed)."""
+    net = PRINTERNET_NET + ".0/24"
+    fwd = "accept" if allow else "drop"
+    nat = f'    ip saddr {net} oifname != "{dev}" masquerade\n' if allow else ""
+    return (f"table ip {NFT_TABLE}\ndelete table ip {NFT_TABLE}\n"
+            f"table ip {NFT_TABLE} {{\n"
+            f"  chain forward {{\n    type filter hook forward priority -10; policy accept;\n"
+            f'    iifname "{dev}" {fwd}\n'
+            f'    oifname "{dev}" ct state established,related accept\n'
+            f'    oifname "{dev}" drop\n  }}\n'
+            f"  chain postrouting {{\n    type nat hook postrouting priority 110; policy accept;\n{nat}  }}\n}}\n")
+
+
+def printernet_firewall(dev, allow):
+    """Returns '' or a problem message. With internet off the printers stay isolated even without
+    the firewall tool, because forwarding is switched off."""
+    try:
+        with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
+            f.write("1\n" if allow else "0\n")
+    except OSError as e:
+        return f"could not set IP forwarding: {e}"
+    if not os.path.exists("/usr/sbin/nft"):
+        return "the firewall tool (nft) is missing, so internet can't be passed on to the printers" if allow else ""
+    r = run(["nft", "-f", "-"], input_text=nft_rules(dev, allow))
+    return "" if r.returncode == 0 else "firewall: " + (r.stderr or r.stdout).strip()
+
+
+def printernet_firewall_off():
+    if os.path.exists("/usr/sbin/nft"):
+        run(["nft", "delete", "table", "ip", NFT_TABLE])
+
+
+def printernet_ap_up(st, dev):
+    run(["nmcli", "radio", "wifi", "on"])
+    run(["nmcli", "connection", "modify", WIFI_CON, "connection.autoconnect", "no"])  # keep, but don't use
+    run(["nmcli", "connection", "down", WIFI_CON])
+    run(["nmcli", "connection", "down", HOTSPOT_CON])
+    run(["nmcli", "connection", "delete", PRINTERNET_CON])
+    r = run(["nmcli", "connection", "add", "type", "wifi", "ifname", dev, "con-name", PRINTERNET_CON,
+             "autoconnect", "yes", "ssid", st["ssid"], "802-11-wireless.mode", "ap", "802-11-wireless.band", "bg",
+             "802-11-wireless.powersave", "2",
+             "ipv4.method", "manual", "ipv4.addresses", PRINTERNET_NET + ".1/24", "ipv4.never-default", "yes",
+             "ipv6.method", "disabled", "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", st["password"]])
+    if r.returncode != 0:
+        return "could not create the printer Wi-Fi: " + r.stderr.strip()
+    r = run(["nmcli", "--wait", "20", "connection", "up", PRINTERNET_CON], timeout=40)
+    return "" if r.returncode == 0 else "could not start the printer Wi-Fi: " + (r.stderr or r.stdout).strip()
+
+
+def printernet_dnsmasq(dev):
+    """DHCP (+ DNS + time server address) for the printers only."""
+    return subprocess.Popen(
+        ["dnsmasq", "--keep-in-foreground", "--conf-file=/dev/null", f"--interface={dev}", "--bind-interfaces",
+         "--except-interface=lo", f"--listen-address={PRINTERNET_NET}.1",
+         f"--dhcp-range={PRINTERNET_NET}.50,{PRINTERNET_NET}.150,12h", f"--dhcp-leasefile={PRINTERNET_LEASES}",
+         f"--dhcp-option=option:router,{PRINTERNET_NET}.1", f"--dhcp-option=option:dns-server,{PRINTERNET_NET}.1",
+         f"--dhcp-option=option:ntp-server,{PRINTERNET_NET}.1", "--dhcp-authoritative", "--no-hosts",
+         f"--pid-file=/run/ffbridge-printers-dnsmasq.pid"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+
+
+def printernet_loop():
+    """Runs inside hotspot-watch while the printer network is switched on. Returns when it is
+    switched off (the normal Wi-Fi / setup hotspot logic then takes over again)."""
+    dev = wifi_device()
+    if not dev:
+        log("printer network: no Wi-Fi hardware")
+        time.sleep(60)
+        return
+    run(["systemctl", "try-restart", "chrony"])  # picks up conf.d/ffbridge-printers.conf (time for the printers)
+    dns = None
+    last_allow = None
+    problem_logged = ""
+    try:
+        while True:
+            st = printernet_state()
+            if not st["enabled"]:
+                return
+            try:
+                active = PRINTERNET_CON in run(["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"]).stdout.splitlines()
+                if not active:
+                    err = printernet_ap_up(st, dev)
+                    if err and err != problem_logged:
+                        log("printer network: " + err)
+                        problem_logged = err
+                    time.sleep(2)
+                if dns is None or dns.poll() is not None:
+                    if dns is not None:
+                        log("printer network: DHCP server stopped (" + (dns.stderr.read() or "").strip()[-200:] + "), restarting")
+                    dns = printernet_dnsmasq(dev)
+                allow = internet_allowed(st)
+                if allow != last_allow:
+                    err = printernet_firewall(dev, allow)
+                    log("printer network: internet for printers " + ("ALLOWED" if allow else "blocked") + (f" ({err})" if err else ""))
+                    last_allow = allow
+                if st["internetUntil"] > 0 and not allow:  # timer ran out: tidy up the state file
+                    st["internetUntil"] = 0
+                    printernet_save(st)
+                write_status_file(f"Printer network mode is ON.\r\n\r\nPrinter Wi-Fi: {st['ssid']}\r\n"
+                                  f"This board on your home network (Ethernet): {ethernet_ip() or 'NOT CONNECTED - plug in the network cable'}\r\n"
+                                  f"Internet for the printers: {'allowed' if allow else 'blocked'}\r\n")
+            except Exception as e:  # noqa: BLE001
+                log(f"printer network: {e}")
+            time.sleep(10)
+    finally:
+        if dns is not None and dns.poll() is None:
+            dns.terminate()
+            try:
+                dns.wait(5)
+            except subprocess.TimeoutExpired:
+                dns.kill()
+
+
+def printernet_status():
+    st = printernet_state()
+    dev = wifi_device()
+    active = PRINTERNET_CON in run(["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"]).stdout.splitlines()
+    now = time.time()
+    return {"ok": True, "enabled": st["enabled"], "active": active, "ssid": st["ssid"], "hasPassword": bool(st["password"]),
+            "address": PRINTERNET_NET + ".1", "wifiPresent": bool(dev), "ethernetIp": ethernet_ip(),
+            "internet": {"allowed": internet_allowed(st, now), "until": st["internetUntil"],
+                         "minutesLeft": max(0, int((st["internetUntil"] - now) // 60)) if st["internetUntil"] > 0 else None},
+            "firewall": os.path.exists("/usr/sbin/nft"), "clients": printernet_leases()}
+
+
+def printernet_enable(ssid, password):
+    ssid = (ssid or "").strip()
+    if not (1 <= len(ssid.encode()) <= 32):
+        return {"ok": False, "message": "The printer Wi-Fi name must be 1 to 32 characters."}
+    st = printernet_state()
+    if password:
+        if not 8 <= len(password) <= 63:
+            return {"ok": False, "message": "The printer Wi-Fi password must be 8 to 63 characters."}
+        st["password"] = password
+    if not st["password"]:
+        return {"ok": False, "message": "Choose a password for the printer Wi-Fi (8 to 63 characters)."}
+    if not wifi_device():
+        return {"ok": False, "message": "No Wi-Fi hardware found on this board."}
+    if not ethernet_ip():
+        return {"ok": False, "message": "Connect the board to your router with a network cable first. In printer network "
+                                         "mode the board's Wi-Fi is used by the printers, so the cable is how the board stays on your home network."}
+    st.update({"enabled": True, "ssid": ssid, "internetUntil": 0})
+    printernet_save(st)
+    run(["systemctl", "restart", "ffbridge-hotspot"])   # the watcher switches into printer network mode
+    return {"ok": True, "message": f"Printer network \"{ssid}\" is starting. Now connect each printer to it on the printer's screen."}
+
+
+def printernet_disable():
+    st = printernet_state()
+    st.update({"enabled": False, "internetUntil": 0})
+    printernet_save(st)
+    run(["systemctl", "stop", "ffbridge-hotspot"])
+    run(["nmcli", "connection", "down", PRINTERNET_CON])
+    run(["nmcli", "connection", "delete", PRINTERNET_CON])
+    printernet_firewall_off()
+    try:
+        with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
+            f.write("0\n")
+    except OSError:
+        pass
+    if saved_wifi()[0]:
+        run(["nmcli", "connection", "modify", WIFI_CON, "connection.autoconnect", "yes"])
+        run(["nmcli", "--wait", "30", "connection", "up", WIFI_CON], timeout=45)
+    run(["systemctl", "start", "ffbridge-hotspot"])
+    return {"ok": True, "message": "Printer network switched off. Connect the printers to your home Wi-Fi again on their screens."}
+
+
+def printernet_internet(minutes):
+    st = printernet_state()
+    if not st["enabled"]:
+        return {"ok": False, "message": "The printer network is off."}
+    m = int(minutes)
+    st["internetUntil"] = 0 if m == 0 else (-1 if m < 0 else int(time.time()) + m * 60)
+    printernet_save(st)
+    # apply right away instead of waiting for the watcher's next round
+    dev = wifi_device()
+    err = printernet_firewall(dev, internet_allowed(st)) if dev else ""
+    if m == 0:
+        msg = "Internet for the printers is blocked."
+    elif m < 0:
+        msg = "Internet for the printers is allowed until you turn it off."
+    else:
+        msg = f"Internet for the printers is allowed for {m} minutes, then it switches off by itself."
+    return {"ok": not err, "message": msg + (f" Problem: {err}" if err else "")}
 
 
 # ----------------------------------------------------------------------------- updates
@@ -880,6 +1143,14 @@ def main():
         out(update_start(args[0]))
     elif cmd == "update-run" and args:
         update_run(args[0])
+    elif cmd == "printernet-status":
+        out(printernet_status())
+    elif cmd == "printernet-enable" and args:
+        out(printernet_enable(args[0], sys.stdin.read().rstrip("\r\n")))
+    elif cmd == "printernet-disable":
+        out(printernet_disable())
+    elif cmd == "printernet-internet" and args:
+        out(printernet_internet(args[0]))
     elif cmd == "restart-ai":
         r = run(["systemctl", "restart", "ffai"])
         out({"ok": r.returncode == 0, "message": "AI service restarted." if r.returncode == 0 else r.stderr.strip()})
