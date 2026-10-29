@@ -35,6 +35,7 @@ pi-bridge/
 | **Mainsail + OrcaSlicer** – port 7125 (7126, … for more printers) | Same Moonraker emulation as the TV app. OrcaSlicer: host type *Octo/Klipper*, `<board-ip>:7125`. |
 | **Wi-Fi from a text file** | The SD card has a small `FFBRIDGE` drive that Windows and macOS can read. Fill in `ffbridge-config.txt` (`wifi_name=`, `wifi_password=`) and it's applied at boot. Hostname, time zone, optional printer and SSH can be set there too. |
 | **Fallback hotspot** | With no network after ~90 s, the board opens the Wi-Fi network `FlashForge-Bridge-XXXX` (password `flashforge`). Phones show a "sign in" page that opens the setup page, and the user picks their home Wi-Fi there. |
+| **Why isn't it online?** | The board writes `WIFI-STATUS.txt` to the FFBRIDGE drive: connected or not, the reason in plain words (wrong password, name not found / wrong upper-lower case, stray space, password too short, no address from the router), what to change, and the Wi-Fi networks it can see. The setup page's Wi-Fi tab shows the same reason. |
 | **Where's my board?** | mDNS name `ffbridge.local`. The board also writes `MY-BRIDGE-ADDRESS.txt` (with its IP) back to the SD card's FFBRIDGE drive. |
 | **AI failure detection** | On by default. Checks a camera picture every 10 s while printing. It can alert only (setup page, Mainsail pop-up, Discord with picture) or alert and pause. A "Not a failure" button mutes alerts for the rest of that print. |
 
@@ -119,7 +120,7 @@ sudo bash pi-bridge/image/build-image.sh --base ~/Downloads/Orangepizero4_x.x.x_
 |---|---|---|
 | `ffbridge-firstboot` | root, once | grow the root partition, new SSH host keys, new machine-id |
 | `ffbridge-config` | root, each boot | apply `ffbridge-config.txt` (only when it changed; retried if Wi-Fi hardware wasn't ready) |
-| `ffbridge-hotspot` | root | setup hotspot when there's no network; retries the saved Wi-Fi every 5 min |
+| `ffbridge-hotspot` | root | setup hotspot when there's no network; retries the saved Wi-Fi every 5 min, but not while a phone is connected to the hotspot (max. 30 min wait); writes `WIFI-STATUS.txt` |
 | `ffbridge` | `ffbridge` | the bridge: setup page :80, Mainsail/Moonraker :7125+ |
 | `ffai` | `ffbridge` | AI service on 127.0.0.1:3333 |
 
