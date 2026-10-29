@@ -225,6 +225,41 @@ ssh_password=            at least 6 characters</pre>
   <p>Changes in the file are applied the next time the board starts.</p>
 </section>
 
+<section data-topic="updates" data-title="Updates" data-group="Advanced">
+  <p>The board checks GitHub for a new version twice a day. When there is one, a dot appears on the ⚙ gear.</p>
+  <ol>
+    <li>Open <b>Advanced → System → Updates</b>. It shows what's new.</li>
+    <li>Press <b>Install update</b>. It takes 1–2 minutes; the page reloads by itself.</li>
+  </ol>
+  <ul>
+    <li>Your printers and settings are kept.</li>
+    <li>Wait until no print is <i>being sent</i> from this page. A print already running on the printer isn't affected.</li>
+    <li>If the new version doesn't start, the board puts the old version back by itself and tells you.</li>
+    <li>Rarely an update needs a new SD card image (for example a new AI model). The page then says so: <a href="#help/backup">download your backup</a>, flash the new image from the link shown, and the settings come back by themselves.</li>
+  </ul>
+</section>
+
+<section data-topic="backup" data-title="Backup and restore" data-group="Advanced">
+  <p>A backup is one small file with your printers (including pairing codes), AI, Discord and Spoolman settings, the page password, print history and Mainsail settings. Print files are not included.</p>
+  <ul>
+    <li><b>Download backup</b> (Advanced → System) saves it to your phone or computer.</li>
+    <li><b>Restore</b>: choose a backup file. The bridge restarts with those settings.</li>
+    <li><b>Automatic copy</b>: the board keeps an up-to-date <code>ffbridge-backup.json</code> on the SD card's FFBRIDGE drive.</li>
+  </ul>
+  <h3>Moving to a new SD card</h3>
+  <ol>
+    <li>Put the old card in your computer and copy <code>ffbridge-backup.json</code> from the FFBRIDGE drive.</li>
+    <li>Flash the new card, take it out and put it back in, and paste the file onto its FFBRIDGE drive (next to <code>ffbridge-config.txt</code>).</li>
+    <li>Start the board. Your printers and settings are restored by themselves.</li>
+  </ol>
+  <p>The backup contains your printers' pairing codes, so keep it private.</p>
+</section>
+
+<section data-topic="errors" data-title="Printer error messages" data-group="Using it">
+  <p>When the printer reports an error, a red box appears on the printer screen with the error code, what it means in plain English and what to try. <b>Repair guide ↗</b> opens FlashForge's page for your printer model.</p>
+  <p>The same message goes to Discord if you use it.</p>
+</section>
+
 <section data-topic="trouble" data-title="Troubleshooting" data-group="Advanced">
   <table>
     <tr><th>Problem</th><th>What to do</th></tr>
@@ -236,6 +271,7 @@ ssh_password=            at least 6 characters</pre>
     <tr><td>No camera picture</td><td>Press <b>Try again</b>. Check the printer's camera is enabled on its screen. The printer's camera can only feed a few viewers at once — close other camera views (FlashPrint, slicer device tabs).</td></tr>
     <tr><td>OrcaSlicer test fails</td><td>Host type must be Octo/Klipper; address with <code>:7125</code>; no API key.</td></tr>
     <tr><td>AI says “starting” for a long time</td><td>The model loads for about a minute after the board starts. If it stays, restart the board (Advanced → System).</td></tr>
+    <tr><td>Red error box on the printer screen</td><td>Follow what it says, then press <b>Clear platform</b> or restart the printer. See <a href="#help/errors">Printer error messages</a>.</td></tr>
     <tr><td>Something else</td><td>Advanced → System → Log shows what happened. Restarting the board fixes most hiccups and doesn't affect running prints.</td></tr>
   </table>
 </section>
