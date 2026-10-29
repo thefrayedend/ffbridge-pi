@@ -161,14 +161,33 @@ input[type=checkbox], input[type=radio] { width: auto; }
 .welcome p { color: var(--muted); margin: 0 0 20px; }
 
 /* ------------------------------------------------------------ printer view */
-/* Camera column about 70% of the width, side panel 30%. When 30% would be narrower than the
-   panel needs (~320px), the panel moves below the camera. --cam-ar is the camera's picture shape
-   (read from the picture in app.js), so the camera box has no black bars. */
-:root { --cam-ar: 1.333; }
-.printer-view { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); gap: 16px; align-items: start; }
-@media (max-width: 1100px) { .printer-view { grid-template-columns: minmax(0, 1fr); } }
+/* Printer screen layout. Default: camera ~70% of the width, side panel the rest but never narrower
+   than 300px; one column on narrow screens. People can change it (Settings → General → Screen layout,
+   saved per browser): app.js sets --cam-fr / --side-fr and the lo-* classes on <html>.
+   --cam-ar is the camera's picture shape (read from the picture), so the camera box has no black bars. */
+:root { --cam-ar: 1.333; --cam-fr: 7fr; --side-fr: 3fr; --cam-pct: 70%; }
+.printer-view { display: grid; grid-template-columns: minmax(0, var(--cam-fr)) minmax(300px, var(--side-fr)); gap: 16px; align-items: start; }
+.lo-left .printer-view { grid-template-columns: minmax(300px, var(--side-fr)) minmax(0, var(--cam-fr)); }
+.lo-left .col-side { order: -1; }
+.lo-below .printer-view { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 760px) { .printer-view, .lo-left .printer-view { grid-template-columns: minmax(0, 1fr); } .lo-left .col-side { order: 0; } }
 .camera {
   position: relative; aspect-ratio: var(--cam-ar); width: 100%; background: #000; border-radius: var(--radius); overflow: hidden; margin-bottom: 14px;
+}
+/* "Keep the whole camera picture on screen" */
+/* (the camera column shrinks to the camera, the side panel gets the rest - no empty strips) */
+.lo-fit .printer-view { grid-template-columns: minmax(0, min(var(--cam-pct), calc((100vh - 110px) * var(--cam-ar)))) minmax(300px, 1fr); }
+.lo-fit.lo-left .printer-view { grid-template-columns: minmax(300px, 1fr) minmax(0, min(var(--cam-pct), calc((100vh - 110px) * var(--cam-ar)))); }
+.lo-fit.lo-below .printer-view { grid-template-columns: minmax(0, 1fr); }
+.lo-fit.lo-below .camera { width: min(100%, calc((100vh - 110px) * var(--cam-ar))); margin-inline: auto; }
+/* Status card at the top of a narrow side panel: buttons below the text, side by side */
+.col-side { container-type: inline-size; }
+@container (max-width: 520px) {
+  .col-side .job { grid-template-columns: 64px minmax(0, 1fr); }
+  .col-side .job.no-thumb { grid-template-columns: minmax(0, 1fr); }
+  .col-side .job-thumb { width: 64px; height: 64px; }
+  .col-side .job-actions { grid-column: 1 / -1; flex-direction: row; }
+  .col-side .job-actions .btn { flex: 1; }
 }
 .camera img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .camera:fullscreen { border-radius: 0; width: 100%; aspect-ratio: auto; }
@@ -363,3 +382,4 @@ dialog.small-dialog { width: min(400px, calc(100% - 24px)); }
 #btn-settings { position: relative; }
 .badge { position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--err); border: 2px solid var(--panel); }
 .update-notes { white-space: pre-wrap; font-weight: 400; margin-top: 6px; font-size: 13px; }
+.field input[type="range"] { width: 100%; max-width: 420px; display: block; padding: 0; }

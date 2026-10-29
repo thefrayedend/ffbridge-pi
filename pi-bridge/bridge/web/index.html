@@ -128,6 +128,22 @@
 
       <!-- ---------- General ---------- -->
       <div class="tab" id="tab-general">
+        <div class="card" id="layout-card">
+          <div class="card-head"><h2>Screen layout <a class="q" href="#help/layout" title="Help" aria-label="Help">?</a></h2><button class="btn small" id="btn-layout-reset" type="button">Default</button></div>
+          <p class="muted">How the printer screen is arranged. Saved in this browser only, so a phone and a PC can each be set up their own way. Changes show straight away.</p>
+          <label class="field"><span class="label">Camera size: <b id="lo-share-val">70%</b> of the width</span><input id="lo-share" type="range" min="50" max="85" step="5"></label>
+          <div class="field"><span class="label">Side panel (filament, temperatures, controls)</span>
+            <label class="check"><input type="radio" name="lo-side" value="right"> On the right</label>
+            <label class="check"><input type="radio" name="lo-side" value="left"> On the left</label>
+            <label class="check"><input type="radio" name="lo-side" value="below"> Always below the camera</label>
+          </div>
+          <div class="field"><span class="label">Print status card (Print a file, Clear platform, progress, Pause/Stop)</span>
+            <label class="check"><input type="radio" name="lo-job" value="under"> Under the camera</label>
+            <label class="check"><input type="radio" name="lo-job" value="side"> At the top of the side panel</label>
+          </div>
+          <label class="check"><input type="checkbox" id="lo-fit"> Keep the whole camera picture on screen (makes the camera smaller on short windows)</label>
+          <p class="hint">On narrow screens (phones) everything is shown in one column.</p>
+        </div>
         <form id="settings-form">
           <div class="card">
             <h2>Multi-colour prints <a class="q" href="#help/colours" title="Help" aria-label="Help">?</a></h2>
@@ -194,6 +210,7 @@
           <a href="#settings/advanced/printers" data-sub="printers">Printer connection</a>
           <a href="#settings/advanced/ai" data-sub="ai">AI failure detection</a>
           <a href="#settings/advanced/mainsail" data-sub="mainsail">Mainsail &amp; OrcaSlicer</a>
+          <a href="#settings/advanced/printernet" data-sub="printernet">Printer network</a>
           <a href="#settings/advanced/system" data-sub="system">System</a>
           <a href="#help">Help ↗</a>
         </nav>
@@ -268,6 +285,63 @@
             <h2>Mainsail</h2>
             <p class="muted">Each printer also has a full Mainsail page (the Klipper web interface). It runs separately from this screen; OrcaSlicer's Device tab shows it. Many Mainsail panels have no effect on FlashForge printers.</p>
             <div id="mainsail-links" class="list"></div>
+          </div>
+        </div>
+
+        <div class="subpage" id="sub-printernet">
+          <div class="card">
+            <div class="card-head"><h2>Printer network <a class="q" href="#help/printernet" title="Help" aria-label="Help">?</a></h2><span class="pill" id="pn-pill">Off</span></div>
+            <p class="muted">Optional. The board's Wi-Fi becomes a private network just for your printers, and the board joins your home network with a <b>network cable</b>. The printers can't reach the internet, and nothing on the internet can reach them. You still use everything through this page, Mainsail and OrcaSlicer as before.</p>
+            <div id="pn-status" class="kv"></div>
+          </div>
+
+          <div class="card hidden" id="pn-on">
+            <h2>Printers on this network</h2>
+            <div id="pn-clients" class="list"></div>
+            <p class="hint">After you connect a printer to the printer Wi-Fi, the bridge finds it at its new address by itself within about 2 minutes.</p>
+          </div>
+
+          <div class="card hidden" id="pn-internet">
+            <h2>Internet for the printers</h2>
+            <p class="muted">Blocked unless you allow it, for example to download a printer firmware update. It switches itself off again.</p>
+            <div id="pn-net-state" class="notice"></div>
+            <div class="row gap wrap">
+              <button class="btn" data-pn-min="60">Allow for 1 hour</button>
+              <button class="btn" data-pn-min="240">Allow for 4 hours</button>
+              <button class="btn" data-pn-min="-1">Until I turn it off</button>
+              <button class="btn danger" data-pn-min="0">Block now</button>
+            </div>
+          </div>
+
+          <div class="card hidden" id="pn-setup">
+            <h2>Switch on</h2>
+            <ol class="steps">
+              <li>Plug a network cable from your router into the board. Check that this page still opens over the cable (Wi-Fi tab: Ethernet connected).</li>
+              <li>Choose a name and password for the printer Wi-Fi below and press <b>Switch on</b>. The board's own Wi-Fi connection to your home network stops.</li>
+              <li>On each printer's screen, connect its Wi-Fi to the new network.</li>
+            </ol>
+            <form id="pn-form" class="stack">
+              <label class="field"><span class="label">Printer Wi-Fi name</span><input id="pn-ssid" maxlength="32" required value="FFBridge-Printers"></label>
+              <label class="field"><span class="label">Printer Wi-Fi password (8 to 63 characters)</span><input id="pn-pass" type="password" minlength="8" maxlength="63" autocomplete="new-password"></label>
+              <label class="check"><input type="checkbox" id="pn-show"> Show password</label>
+              <details class="hint"><summary>Good to know before you switch on</summary>
+                <ul>
+                  <li>FlashPrint, the FlashForge app or OrcaSlicer's own FlashForge connection can't reach the printers directly any more. Use this page, Mainsail or OrcaSlicer's Klipper/Octo connection (port 7125…), which go through the board.</li>
+                  <li>Printer firmware updates need internet: allow it for an hour from this page when you want to update.</li>
+                  <li>The board's small Wi-Fi antenna has less range than a router. Keep the printers reasonably close to the board.</li>
+                  <li>The board gives the printers the correct time, so their clocks stay right without internet.</li>
+                  <li>To undo it, press <b>Switch off</b> and connect the printers to your home Wi-Fi again.</li>
+                </ul>
+              </details>
+              <button class="btn primary" type="submit">Switch on</button>
+              <div id="pn-msg" class="notice hidden"></div>
+            </form>
+          </div>
+
+          <div class="card hidden" id="pn-off-card">
+            <h2>Switch off</h2>
+            <p class="muted">The board goes back to your home Wi-Fi (if one is saved). Connect each printer to your home Wi-Fi again on its screen.</p>
+            <button class="btn danger" id="btn-pn-off">Switch off printer network</button>
           </div>
         </div>
 

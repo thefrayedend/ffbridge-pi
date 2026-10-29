@@ -86,7 +86,7 @@ function route() {
   if (state.view === 'help') showHelp(parts[1] || 'start');
   if (state.view === 'settings') {
     state.tab = ['general', 'network', 'advanced'].includes(parts[1]) ? parts[1] : 'general';
-    if (state.tab === 'advanced') state.sub = ['printers', 'ai', 'mainsail', 'system'].includes(parts[2]) ? parts[2] : 'printers';
+    if (state.tab === 'advanced') state.sub = ['printers', 'ai', 'mainsail', 'printernet', 'system'].includes(parts[2]) ? parts[2] : 'printers';
   }
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + state.view));
   $('#btn-settings').classList.toggle('active', state.view === 'settings');
@@ -97,12 +97,13 @@ function route() {
   $$('.subpage').forEach((t) => t.classList.toggle('active', t.id === 'sub-' + state.sub));
   if (state.view === 'home') { setCamera(); renderHome(); } else stopCamera();
   if (state.view === 'settings') {
-    if (state.tab === 'general') loadSettings();
+    if (state.tab === 'general') { loadSettings(); renderLayoutForm(); }
     if (state.tab === 'network') loadNetwork(true);
     if (state.tab === 'advanced') {
       if (state.sub === 'printers') renderPrinterList();
       if (state.sub === 'ai') loadAi();
       if (state.sub === 'mainsail') renderMainsail();
+      if (state.sub === 'printernet') loadPrinterNet();
       if (state.sub === 'system') { loadSystem(); loadLogs(); loadUpdate(); }
     }
   }
@@ -951,6 +952,8 @@ async function loadNetwork(scan) {
     kv.push([`Saved Wi-Fi "${n.wifi.savedSsid}"`, n.wifi.problem]);
     kv.push(['What to do', n.wifi.fix || '']);
   }
+  const pn = await api('printer-network').catch(() => ({}));
+  if (pn.enabled) kv.push(['Printer network', `On: the board's Wi-Fi is the printer network "${pn.ssid}". Wi-Fi changes here are saved for when you switch it off (Advanced → Printer network).`]);
   if (n.hotspot && n.hotspot.active) kv.push(['Setup hotspot', `On: "${n.hotspot.ssid}" (password ${n.hotspot.password})`]);
   $('#net-status').innerHTML = kv.map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v)}</div>`).join('');
   if (scan) wifiScan();
@@ -1146,6 +1149,120 @@ document.addEventListener('click', (e) => {
   if (!b) return;
   const text = $('#' + b.dataset.copy).textContent;
   (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => toast('Copied'), () => toast(text));
+});
+
+// ---------------------------------------------------------------- settings: screen layout (per browser)
+const LAYOUT_DEFAULT = { share: 70, side: 'right', job: 'under', fit: false };
+function getLayout() {
+  try { return { ...LAYOUT_DEFAULT, ...JSON.parse(localStorage.getItem('ffb-layout') || '{}') }; } catch (_) { return { ...LAYOUT_DEFAULT }; }
+}
+function applyLayout(lo = getLayout()) {
+  const root = document.documentElement;
+  const share = Math.min(85, Math.max(50, Number(lo.share) || 70));
+  root.style.setProperty('--cam-fr', share + 'fr');
+  root.style.setProperty('--side-fr', (100 - share) + 'fr');
+  root.style.setProperty('--cam-pct', share + '%');
+  root.classList.toggle('lo-left', lo.side === 'left');
+  root.classList.toggle('lo-below', lo.side === 'below');
+  root.classList.toggle('lo-fit', !!lo.fit);
+  const job = $('#job');
+  if (lo.job === 'side') $('.col-side').prepend(job); else $('.col-main').append(job);
+}
+function saveLayout(lo) {
+  try { localStorage.setItem('ffb-layout', JSON.stringify(lo)); } catch (_) {}
+  applyLayout(lo);
+}
+function renderLayoutForm() {
+  const lo = getLayout();
+  $('#lo-share').value = lo.share;
+  $('#lo-share-val').textContent = lo.share + '%';
+  $$('input[name="lo-side"]').forEach((r) => { r.checked = r.value === lo.side; });
+  $$('input[name="lo-job"]').forEach((r) => { r.checked = r.value === lo.job; });
+  $('#lo-fit').checked = !!lo.fit;
+}
+$('#layout-card').addEventListener('input', () => {
+  const lo = {
+    share: Number($('#lo-share').value),
+    side: ($('input[name="lo-side"]:checked') || {}).value || 'right',
+    job: ($('input[name="lo-job"]:checked') || {}).value || 'under',
+    fit: $('#lo-fit').checked,
+  };
+  $('#lo-share-val').textContent = lo.share + '%';
+  saveLayout(lo);
+});
+$('#btn-layout-reset').addEventListener('click', () => {
+  try { localStorage.removeItem('ffb-layout'); } catch (_) {}
+  applyLayout(); renderLayoutForm(); toast('Layout back to default');
+});
+applyLayout();
+
+// ---------------------------------------------------------------- settings: printer network (router mode)
+let pnTimer = null;
+async function loadPrinterNet() {
+  clearTimeout(pnTimer);
+  const n = await api('printer-network');
+  const kv = [];
+  if (n.ok === false) {
+    $('#pn-status').innerHTML = `<div>Status</div><div>${esc(n.message || 'Not available')}</div>`;
+    ['#pn-on', '#pn-internet', '#pn-setup', '#pn-off-card'].forEach((id) => $(id).classList.add('hidden'));
+    return;
+  }
+  const pill = $('#pn-pill');
+  pill.textContent = n.enabled ? (n.active ? 'On' : 'Starting…') : 'Off';
+  pill.className = 'pill ' + (n.enabled ? (n.active ? 'ok' : 'warn') : '');
+  if (n.enabled) {
+    kv.push(['Printer Wi-Fi', `${n.ssid}${n.active ? '' : ' (starting…)'}`]);
+    kv.push(['Board on the printer network', n.address]);
+  }
+  kv.push(['Board on your home network', n.ethernetIp ? `Ethernet · ${n.ethernetIp}` : 'No network cable connected']);
+  if (!n.wifiPresent) kv.push(['Wi-Fi', 'No Wi-Fi hardware found on this board']);
+  $('#pn-status').innerHTML = kv.map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v)}</div>`).join('');
+  ['#pn-on', '#pn-internet', '#pn-off-card'].forEach((id) => $(id).classList.toggle('hidden', !n.enabled));
+  $('#pn-setup').classList.toggle('hidden', n.enabled);
+  if (n.enabled) {
+    const printers = state.status?.printers || [];
+    const clients = n.clients || [];
+    $('#pn-clients').innerHTML = clients.length ? clients.map((c) => {
+      const p = printers.find((x) => x.ip === c.ip);
+      return `<div class="list-item"><div><b>${esc(p ? p.name : (c.name || 'Device'))}</b><div class="sub">${esc(c.ip)}${p ? '' : ' · not one of your saved printers (yet)'}</div></div>
+        <span class="pill ${p && p.online ? 'ok' : 'warn'}">${p ? (p.online ? 'Connected' : 'Connecting…') : 'Joined'}</span></div>`;
+    }).join('') : '<p class="muted">No printer has joined yet. On the printer\'s screen, connect its Wi-Fi to <b>' + esc(n.ssid) + '</b>.</p>';
+    const ni = n.internet || {};
+    notice($('#pn-net-state'), !ni.allowed ? 'Blocked. The printers can only talk to this board.'
+      : ni.until === -1 ? 'Allowed until you turn it off.'
+      : `Allowed for about ${ni.minutesLeft} more minute${ni.minutesLeft === 1 ? '' : 's'}, then blocked again by itself.`, ni.allowed ? 'warn' : 'ok');
+    if (!n.firewall) notice($('#pn-net-state'), 'Blocked. (This board has no firewall tool, so internet can\'t be allowed for the printers.)', 'ok');
+  } else if (!$('#pn-ssid').value) {
+    $('#pn-ssid').value = n.ssid || 'FFBridge-Printers';
+  }
+  if (state.view === 'settings' && state.sub === 'printernet') pnTimer = setTimeout(loadPrinterNet, 10000);
+}
+$('#pn-show').addEventListener('change', (e) => { $('#pn-pass').type = e.target.checked ? 'text' : 'password'; });
+$('#pn-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = $('#pn-msg');
+  const ssid = $('#pn-ssid').value.trim(), password = $('#pn-pass').value;
+  if (!confirm(`Switch on the printer network "${ssid}"?\n\nThe board's Wi-Fi will be used for the printers only. The board stays on your home network through the cable. Your printers go offline until you connect them to "${ssid}" on their screens.`)) return;
+  notice(msg, 'Switching on…');
+  const r = await api('printer-network', { method: 'POST', body: { action: 'enable', ssid, password } });
+  notice(msg, (r.ok ? '✔ ' : '✘ ') + (r.message || ''), r.ok ? 'ok' : 'err');
+  if (r.ok) { $('#pn-pass').value = ''; setTimeout(loadPrinterNet, 3000); }
+});
+$('#pn-internet').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-pn-min]');
+  if (!b) return;
+  const r = await api('printer-network', { method: 'POST', body: { action: 'internet', minutes: Number(b.dataset.pnMin) } });
+  toast(r.message || (r.ok ? 'Done' : 'Failed'), !r.ok);
+  loadPrinterNet();
+});
+$('#btn-pn-off').addEventListener('click', async () => {
+  if (!confirm('Switch off the printer network? The printers go offline until you connect them to your home Wi-Fi again.')) return;
+  const b = $('#btn-pn-off');
+  b.disabled = true; b.textContent = 'Switching off…';
+  const r = await api('printer-network', { method: 'POST', body: { action: 'disable' } }).catch(() => ({ ok: false, message: 'Lost the connection to the board. Reload the page in a minute.' }));
+  b.disabled = false; b.textContent = 'Switch off printer network';
+  toast(r.message || (r.ok ? 'Switched off' : 'Failed'), !r.ok);
+  loadPrinterNet();
 });
 
 // ---------------------------------------------------------------- start
