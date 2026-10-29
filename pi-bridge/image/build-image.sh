@@ -85,7 +85,13 @@ n = max((i for i in z.infolist() if i.filename.lower().endswith('.img')), key=la
 with z.open(n) as s, open(sys.argv[2], 'wb') as d: shutil.copyfileobj(s, d, 16 << 20)
 PY
   ;;
-  *.7z) command -v 7z >/dev/null || die "7z needed (apt install p7zip-full)"; 7z e -so "$SRC" '*.img' > "$BASEIMG" ;;
+  *.7z)
+    command -v 7z >/dev/null || die "7z needed (apt install p7zip-full)"
+    mkdir -p "$WORK/unpack"
+    7z x -y -o"$WORK/unpack" "$SRC" >/dev/null
+    IMGFILE="$(find "$WORK/unpack" -type f -iname '*.img' -printf '%s %p\n' | sort -n | tail -1 | cut -d' ' -f2-)"
+    [ -n "$IMGFILE" ] || die "no .img file found inside $SRC"
+    mv "$IMGFILE" "$BASEIMG"; rm -rf "$WORK/unpack" ;;
   *) cp --sparse=always "$SRC" "$BASEIMG" ;;
 esac
 
@@ -209,6 +215,8 @@ rsync -a --exclude '__pycache__' "$HERE/rootfs/" "$MNT/"
 chmod 440 "$MNT/etc/sudoers.d/ffbridge"
 chmod 755 "$MNT/usr/local/sbin/ffbridge-helper"
 git -C "$REPO" describe --always --dirty > "$MNT/opt/ffbridge/BUILD" 2>/dev/null || date -u +%Y%m%d > "$MNT/opt/ffbridge/BUILD"
+# Fingerprint of the parts only a new image can change (see image-hash.sh / one-click updates).
+bash "$HERE/image-hash.sh" > "$MNT/opt/ffbridge/IMAGE_HASH"
 
 say "Filling the FFBRIDGE settings drive"
 mkdir -p "$WORK/setup"
