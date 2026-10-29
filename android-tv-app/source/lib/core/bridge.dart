@@ -9,6 +9,7 @@ import 'dart:typed_data';
 
 import 'bridge_state.dart';
 import 'config.dart';
+import 'errors.dart';
 import 'gcode.dart';
 import 'ff/ff_client.dart';
 import 'ff/models.dart';
@@ -241,10 +242,26 @@ class PrinterBridge {
     }
     jobState = newState;
     if (fname.isNotEmpty) jobFile = fname;
-    jobMessage = newState == 'error' ? 'Printer error ${d.errorCode}' : (newState == 'paused' ? 'Paused' : '');
+    final err = currentError;
+    if ((err?.code ?? '') != _lastErrorCode) {
+      _lastErrorCode = err?.code ?? '';
+      if (err != null) {
+        gcodeResponse('!! Printer error ${err.code}: ${err.title}. ${err.fix}');
+        log.warn('${cfg.name}: printer error ${err.code} (${err.title})');
+      }
+    }
+    jobMessage = newState == 'error'
+        ? (err == null ? 'Printer error' : 'Printer error ${err.code}: ${err.title}')
+        : (newState == 'paused' ? (err == null ? 'Paused' : 'Paused — ${err.code}: ${err.title}') : '');
     if (active) _lastPrintDuration = d.printDuration;
     _rebuild();
   }
+
+  String _lastErrorCode = '';
+
+  /// Plain-English explanation of the printer's current error code (null = no error).
+  PrinterError? get currentError =>
+      explainError(client.last?.errorCode ?? '', client.isCreator5 ? 'creator5' : (client.isAD5X ? 'ad5x' : '5m'));
 
   void _onJobTransition(String from, String to, PrinterDetail d) {
     final fname = d.printFileName;
@@ -654,7 +671,10 @@ class PrinterBridge {
     fields['Bed'] = '${d?.bed.current.round() ?? 0}/${d?.bed.target.round() ?? 0}°C';
     await discord.send(
       title: '${titles[event] ?? event} — ${cfg.name}',
-      description: jobFile.isEmpty ? client.model : jobFile,
+      description: [
+        jobFile.isEmpty ? client.model : jobFile,
+        if (currentError != null) '**${currentError!.code}: ${currentError!.title}**\n${currentError!.fix}',
+      ].join('\n\n'),
       color: colors[event] ?? 0x2196F3,
       fields: fields,
       image: snap,
