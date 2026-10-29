@@ -8,6 +8,7 @@ import 'dart:io';
 import 'ai_monitor.dart';
 import 'core.dart';
 import 'pi_config.dart';
+import 'printer_api.dart';
 import 'system_control.dart';
 
 const piBridgeVersion = '1.0.0';
@@ -21,6 +22,7 @@ class SetupServer {
   final int port;
   HttpServer? _server;
   List<DiscoveredPrinter> _lastScan = [];
+  late final PrinterApi printers = PrinterApi(host);
 
   SetupServer({required this.host, required this.pi, required this.ai, required this.sys, required this.webDir, this.port = 80});
 
@@ -94,6 +96,9 @@ class SetupServer {
     'ico': 'image/x-icon',
     'json': 'application/json',
     'txt': 'text/plain; charset=utf-8',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'webp': 'image/webp',
   };
 
   Future<void> _static(HttpRequest req, String path) async {
@@ -122,6 +127,7 @@ class SetupServer {
 
       // printers
       if (seg.isNotEmpty && seg[0] == 'printers') {
+        if (await printers.handle(req, seg, _json)) return;
         if (seg.length == 1 && m == 'GET') return await _json(req, {'printers': [for (final c in host.config.printers) _printerJson(c, req)]});
         if (seg.length == 2 && seg[1] == 'scan' && m == 'POST') {
           _lastScan = await discoverPrinters(timeout: const Duration(seconds: 5));
@@ -304,6 +310,7 @@ class SetupServer {
       'model': c.model,
       'enabled': c.enabled,
       'levelBeforePrint': c.levelBeforePrint,
+      'autoClearPlatform': c.autoClearPlatform,
       'cameraUrl': c.cameraUrl,
       'mainsailUrl': 'http://$h:${c.port}/',
       'orcaHost': '$orca:${c.port}',
@@ -327,6 +334,7 @@ class SetupServer {
       'waitingForSlots': b?.pendingMapping?.file,
       'ai': ai.stateFor(c.id).toJson(),
       'aiEnabled': pi.ai.enabledFor(c.id),
+      ...printers.liveJson(b),
     };
   }
 
@@ -413,6 +421,7 @@ class SetupServer {
       ..port = port
       ..cameraUrl = (b['cameraUrl'] ?? cfg.cameraUrl).toString().trim()
       ..levelBeforePrint = b['levelBeforePrint'] is bool ? b['levelBeforePrint'] : cfg.levelBeforePrint
+      ..autoClearPlatform = b['autoClearPlatform'] is bool ? b['autoClearPlatform'] : cfg.autoClearPlatform
       ..enabled = b['enabled'] is bool ? b['enabled'] : cfg.enabled;
     if (cfg.serial.isEmpty) return {'ok': false, 'message': 'Serial number is missing and the printer was not found by a network scan. Type it in.'};
     if (cfg.checkCode.isEmpty) return {'ok': false, 'message': 'Enter the pairing code shown on the printer in LAN-only mode.'};
