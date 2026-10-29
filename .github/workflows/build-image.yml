@@ -67,11 +67,11 @@ jobs:
       - name: Build the one-click update package
         run: |
           bash pi-bridge/image/make-update.sh --bridge-bin "$GITHUB_WORKSPACE/pibridge" \
-            --version "1.0.${{ github.run_number }}" --out "$GITHUB_WORKSPACE/out"
-          ls -lh out
+            --version "1.0.${{ github.run_number }}" --out "$GITHUB_WORKSPACE/update"
+          ls -lh update
 
       - name: Publish it as the "Latest SD card image" release
         run: |
           gh release delete latest-image --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
-          gh release create latest-image out/* --repo "$GITHUB_REPOSITORY" \
+          gh release create latest-image out/* update/* --repo "$GITHUB_REPOSITORY" \
             --title "Latest SD card image" --notes-file pi-bridge/RELEASE-NOTES.md
