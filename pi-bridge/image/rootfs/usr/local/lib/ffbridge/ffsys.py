@@ -595,6 +595,198 @@ def hotspot_watch():
         time.sleep(15)
 
 
+# ----------------------------------------------------------------------------- updates
+# One-click updates: GitHub's build publishes ffbridge-update.json + ffbridge-update.tar.gz next
+# to the SD card image. The package holds the bridge program, the web page, the AI service code
+# and the board's system scripts (everything except system packages and the AI model).
+# The previous version is kept; if the new bridge doesn't answer within 90 s it is rolled back.
+UPDATE_ROOT = os.environ.get("FFB_ROOT", "/")            # tests install into a fake root
+UPDATE_DIR = os.path.join(STATE_DIR, "update")
+UPDATE_STATUS = os.path.join(UPDATE_DIR, "status.json")
+UPDATE_TEST = os.environ.get("FFB_UPDATE_TEST") == "1"     # no systemctl / no real health check
+
+
+def set_update_state(state, message, **extra):
+    os.makedirs(UPDATE_DIR, exist_ok=True)
+    d = {"state": state, "message": message, "time": time.strftime("%Y-%m-%d %H:%M:%S"), **extra}
+    tmp = UPDATE_STATUS + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f)
+    os.replace(tmp, UPDATE_STATUS)
+    log(f"update: {state}: {message}")
+    return d
+
+
+def _download(url, dest, timeout=120):
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "ffbridge-updater"})
+    with urllib.request.urlopen(req, timeout=timeout) as r, open(dest, "wb") as f:
+        while True:
+            chunk = r.read(65536)
+            if not chunk:
+                break
+            f.write(chunk)
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _healthy(version, wait=90):
+    """True when the restarted bridge answers on the page (with the new version, if readable)."""
+    if UPDATE_TEST:
+        return os.environ.get("FFB_UPDATE_TEST_HEALTHY", "1") == "1"
+    import urllib.error
+    import urllib.request
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        time.sleep(3)
+        try:
+            with urllib.request.urlopen("http://127.0.0.1/api/status", timeout=5) as r:
+                v = json.loads(r.read().decode()).get("version", "")
+                if v == version:
+                    return True
+        except urllib.error.HTTPError as e:
+            if e.code == 401:  # page password set: it's running, can't read the version
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
+def _systemctl(*args):
+    if not UPDATE_TEST:
+        run(["systemctl", *args], timeout=120)
+
+
+def update_run(base_url):
+    """Downloads, verifies and installs the update from base_url (…/releases/download/latest-image)."""
+    import shutil
+    import tarfile
+    work = os.path.join(UPDATE_DIR, "work")
+    prev = os.path.join(UPDATE_DIR, "previous")
+    try:
+        shutil.rmtree(work, ignore_errors=True)
+        os.makedirs(work)
+        set_update_state("downloading", "Downloading the update…")
+        man_path = os.path.join(work, "manifest.json")
+        _download(base_url.rstrip("/") + "/ffbridge-update.json", man_path, timeout=30)
+        man = json.load(open(man_path))
+        version = man["version"]
+        pkg = os.path.join(work, "ffbridge-update.tar.gz")
+        _download(base_url.rstrip("/") + "/ffbridge-update.tar.gz", pkg)
+        if _sha256(pkg) != man["sha256"]:
+            return set_update_state("failed", "The download was damaged (checksum mismatch). Nothing was changed — try again.")
+        cur_hash = ""
+        try:
+            cur_hash = open(os.path.join(UPDATE_ROOT, "opt/ffbridge/IMAGE_HASH")).read().strip()
+        except OSError:
+            pass
+        if man.get("imageHash") and cur_hash and man["imageHash"] != cur_hash:
+            return set_update_state("image-required", "This update changes system packages, so it needs a new SD card image. Nothing was changed.")
+
+        set_update_state("installing", f"Installing version {version}…", version=version)
+        new = os.path.join(work, "new")
+        with tarfile.open(pkg) as t:
+            for m in t.getmembers():  # refuse anything that would escape the folder
+                if m.name.startswith("/") or ".." in m.name.split("/") or not (m.isfile() or m.isdir()):
+                    return set_update_state("failed", f"The update package contains an unexpected entry ({m.name}). Nothing was changed.")
+            t.extractall(new)
+
+        replace_dirs = man.get("replaceDirs", [])
+        files = []
+        for dirpath, _, names in os.walk(new):
+            for n in names:
+                rel = os.path.relpath(os.path.join(dirpath, n), new).replace(os.sep, "/")
+                if not any(rel == d or rel.startswith(d + "/") for d in replace_dirs):
+                    files.append(rel)
+
+        # keep the current version for rollback
+        shutil.rmtree(prev, ignore_errors=True)
+        os.makedirs(prev)
+        created = []
+        for d in replace_dirs:
+            src = os.path.join(UPDATE_ROOT, d)
+            if os.path.isdir(src):
+                shutil.copytree(src, os.path.join(prev, d), symlinks=True)
+        for rel in files:
+            dst = os.path.join(UPDATE_ROOT, rel)
+            if os.path.exists(dst):
+                os.makedirs(os.path.dirname(os.path.join(prev, rel)), exist_ok=True)
+                shutil.copy2(dst, os.path.join(prev, rel))
+            else:
+                created.append(rel)
+        json.dump({"created": created, "replaceDirs": replace_dirs, "files": files}, open(os.path.join(prev, ".rollback.json"), "w"))
+
+        def install(source_root):
+            for d in replace_dirs:
+                dst = os.path.join(UPDATE_ROOT, d)
+                if os.path.isdir(os.path.join(source_root, d)):
+                    tmp = dst + ".new"
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    shutil.copytree(os.path.join(source_root, d), tmp, symlinks=True)
+                    shutil.rmtree(dst, ignore_errors=True)
+                    os.rename(tmp, dst)
+            for rel in files:
+                src = os.path.join(source_root, rel)
+                if not os.path.exists(src):
+                    continue
+                dst = os.path.join(UPDATE_ROOT, rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                tmp = dst + ".ffbnew"
+                shutil.copy2(src, tmp)
+                os.replace(tmp, dst)  # atomic per file: a running program keeps its old copy
+
+        install(new)
+        if any(f.startswith("etc/sudoers.d/") for f in files):
+            for f in files:
+                if f.startswith("etc/sudoers.d/"):
+                    os.chmod(os.path.join(UPDATE_ROOT, f), 0o440)
+        _systemctl("daemon-reload")
+        for rel in created:  # a service that is new in this version: switch it on
+            if rel.startswith("etc/systemd/system/") and rel.endswith(".service"):
+                _systemctl("enable", "--now", os.path.basename(rel))
+        if any(f.startswith("opt/ffbridge/ai/") for f in files):
+            _systemctl("restart", "ffai")
+        _systemctl("restart", "ffbridge")
+        if _healthy(version):
+            shutil.rmtree(work, ignore_errors=True)
+            return set_update_state("done", f"Updated to version {version}.", version=version)
+
+        # roll back
+        set_update_state("rolling-back", "The new version didn't start. Going back to the previous version…")
+        install(prev)
+        for rel in created:
+            try:
+                os.remove(os.path.join(UPDATE_ROOT, rel))
+            except OSError:
+                pass
+        _systemctl("daemon-reload")
+        _systemctl("restart", "ffai")
+        _systemctl("restart", "ffbridge")
+        return set_update_state("rolled-back", f"Version {version} didn't start, so the previous version was restored. Nothing was lost.")
+    except Exception as e:  # noqa: BLE001
+        return set_update_state("failed", f"The update failed: {e}. Nothing was changed." if not os.path.exists(os.path.join(prev, ".rollback.json"))
+                             else f"The update failed: {e}.")
+
+
+def update_start(base_url):
+    """Starts update_run in the background (outside the bridge's service, which gets restarted)."""
+    if not re.fullmatch(r"https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/releases/download/[A-Za-z0-9._-]+", base_url):
+        return {"ok": False, "message": "Invalid update address."}
+    set_update_state("starting", "Starting the update…")
+    helper = "/usr/local/sbin/ffbridge-helper"
+    r = run(["systemd-run", "--unit", f"ffbridge-update-{int(time.time())}", "--collect", helper, "update-run", base_url])
+    if r.returncode != 0:  # no systemd-run: detach ourselves
+        subprocess.Popen([helper, "update-run", base_url], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"ok": True, "message": "Update started."}
+
+
 # ----------------------------------------------------------------------------- system
 def set_hostname(name):
     name = re.sub(r"[^a-z0-9-]", "", name.lower())[:32]
@@ -684,6 +876,10 @@ def main():
         out({"ok": True, "message": "Saved Wi-Fi removed."})
     elif cmd == "set-hostname" and args:
         out(set_hostname(args[0]))
+    elif cmd == "update-start" and args:
+        out(update_start(args[0]))
+    elif cmd == "update-run" and args:
+        update_run(args[0])
     elif cmd == "restart-ai":
         r = run(["systemctl", "restart", "ffai"])
         out({"ok": r.returncode == 0, "message": "AI service restarted." if r.returncode == 0 else r.stderr.strip()})
