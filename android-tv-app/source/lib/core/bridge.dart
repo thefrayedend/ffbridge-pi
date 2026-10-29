@@ -56,6 +56,11 @@ class PrinterBridge {
   final _changes = StreamController<void>.broadcast(); // UI refresh
   Stream<Map<String, dynamic>> get notifications => _events.stream;
   Stream<void> get changes => _changes.stream;
+  // A connection attempt can finish after the printer was edited/removed (dispose): ignore it
+  // instead of crashing the whole program with "Cannot add new events after calling close".
+  void _notify() {
+    if (!_changes.isClosed) _changes.add(null);
+  }
 
   Map<String, Map<String, dynamic>> status = {};
   final Map<String, TempSeries> tempStore = {};
@@ -354,7 +359,7 @@ class PrinterBridge {
     _emit('notify_active_spool_set', [
       {'spool_id': id}
     ]);
-    _changes.add(null);
+    _notify();
   }
 
   Future<void> _trackSpool(double progress) async {
@@ -414,7 +419,7 @@ class PrinterBridge {
       _lastSent[obj] = Map<String, dynamic>.from(fields);
     });
     if (diff.isNotEmpty) _emit('notify_status_update', [diff, eventtime]);
-    _changes.add(null);
+    _notify();
   }
 
   static bool _deepEq(dynamic a, dynamic b) {
@@ -491,7 +496,7 @@ class PrinterBridge {
               ? '// $name is waiting: check the filament slots in the pop-up, then press Start print'
               : '!! $name: the loaded filaments don\'t match the slicer file. Choose the slots in the pop-up, then press Start print.');
           showMappingPrompt();
-          _changes.add(null);
+          _notify();
           return;
         }
         mappings = plan.toMappings();
@@ -615,14 +620,14 @@ class PrinterBridge {
     if (_pendingMapping == null) return;
     _pendingMapping = null;
     _action('prompt_end');
-    _changes.add(null);
+    _notify();
   }
 
   Future<void> uploadToPrinter(File f, String name, {bool printNow = false, List<MaterialMapping>? mappings}) async {
     final tools = files.toolCount(name);
     var lastPct = -10;
     uploadStatus = 'Uploading $name to printer...';
-    _changes.add(null);
+    _notify();
     try {
       await client.upload(f, name, printNow: printNow, leveling: cfg.levelBeforePrint, toolCount: tools, mappings: mappings,
           onProgress: (sent, total) {
@@ -631,14 +636,14 @@ class PrinterBridge {
           lastPct = pct;
           uploadStatus = 'Uploading $name to printer: $pct%';
           gcodeResponse('// $uploadStatus');
-          _changes.add(null);
+          _notify();
         }
       });
       files.printerFiles[name] = DateTime.now().millisecondsSinceEpoch / 1000.0;
       gcodeResponse('// Upload to printer complete: $name');
     } finally {
       uploadStatus = '';
-      _changes.add(null);
+      _notify();
     }
   }
 
