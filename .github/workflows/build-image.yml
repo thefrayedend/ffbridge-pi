@@ -41,8 +41,10 @@ jobs:
           dart run test/mapping_check.dart
           dart run test/errors_check.dart
           dart run test/backup_check.dart
+          dart run test/finder_check.dart
           python3 ../image/test/wifi_status_check.py
           python3 ../image/test/update_check.py
+          python3 ../image/test/printernet_check.py
           dart compile exe bin/pibridge.dart -o "$GITHUB_WORKSPACE/pibridge" \
             -DFFB_VERSION="1.0.${{ github.run_number }}" -DFFB_REPO="${{ github.repository }}"
 
