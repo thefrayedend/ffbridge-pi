@@ -31,7 +31,7 @@ pi-bridge/
 
 | | |
 |---|---|
-| **Setup page** – `http://ffbridge.local` (port 80) | The TV app's screens in a browser: scan for the printer, enter the pairing code, test, save; Spoolman and Discord. Also new pages for Wi-Fi, AI Watch and System (log, restart, optional password). |
+| **Printer screen** – `http://ffbridge.local` (port 80) | Camera-first control page (Bambu-style): job progress, Pause/Resume/Stop, Clear platform (+ optional auto clear), temperatures, light, filtration, speed/Z-offset/fans, filament slots, file upload and a print window with smart multi-colour slot matching. Settings: General, Wi-Fi, Advanced (printer connection and pairing code, AI, Mainsail & OrcaSlicer, system). Built-in Help with screenshots (`bridge/web/help/`). |
 | **Mainsail + OrcaSlicer** – port 7125 (7126, … for more printers) | Same Moonraker emulation as the TV app. OrcaSlicer: host type *Octo/Klipper*, `<board-ip>:7125`. |
 | **Wi-Fi from a text file** | The SD card has a small `FFBRIDGE` drive that Windows and macOS can read. Fill in `ffbridge-config.txt` (`wifi_name=`, `wifi_password=`) and it's applied at boot. Hostname, time zone, optional printer and SSH can be set there too. |
 | **Fallback hotspot** | With no network after ~90 s, the board opens the Wi-Fi network `FlashForge-Bridge-XXXX` (password `flashforge`). Phones show a "sign in" page that opens the setup page, and the user picks their home Wi-Fi there. |
