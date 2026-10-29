@@ -1,0 +1,241 @@
+<!-- Help pages for the FlashForge Bridge screen. Each <section> is one topic (loaded by app.js). -->
+
+<section data-topic="start" data-title="Quick start" data-group="Getting started">
+  <p>FlashForge Bridge turns a small board (Orange Pi Zero 4) into a control screen for your FlashForge printer: live camera, print control, multi-colour filament matching, AI failure detection, and a connection for OrcaSlicer and Mainsail. You open it in any web browser on your phone, tablet or computer.</p>
+  <h3>You need</h3>
+  <ul>
+    <li>The board with its SD card and a USB-C power supply (5 V / 3 A or better)</li>
+    <li>A FlashForge Creator 5 / 5 Pro, AD5X, or Adventurer 5M / 5M Pro on your home network</li>
+  </ul>
+  <h3>Steps</h3>
+  <ol>
+    <li><b>Flash the SD card</b> with the FlashForge Bridge image (balenaEtcher or Raspberry Pi Imager → “Use custom”).</li>
+    <li><b>Put in your Wi-Fi details.</b> After flashing, unplug and re-insert the card. Your computer shows a small drive called <b>FFBRIDGE</b>. Open <code>ffbridge-config.txt</code> on it and fill in two lines:
+<pre>wifi_name=YourWiFiName
+wifi_password=YourWiFiPassword</pre>
+      Upper and lower case matter. Save, then eject the card. (Using a network cable? Skip this step.)</li>
+    <li><b>Start the board.</b> Put the card in, plug in the power and wait about 2 minutes. The first start takes longest.</li>
+    <li><b>Open the page.</b> On a device on the same Wi-Fi, go to <code>http://ffbridge.local</code>. If that doesn't open, see <a href="#help/wifi">Wi-Fi and finding the board</a>.</li>
+    <li><b>Connect your printer</b> — see <a href="#help/connect">Connect your printer</a>.</li>
+  </ol>
+  <div class="tip">Everything on this page also has a small <b>?</b> next to it that jumps to the matching help topic.</div>
+</section>
+
+<section data-topic="wifi" data-title="Wi-Fi and finding the board" data-group="Getting started">
+  <h3>Open the page</h3>
+  <p>Go to <code>http://ffbridge.local</code>. Some Android phones and older Windows PCs don't understand “.local” names. Use the board's number address instead (for example <code>http://192.168.1.57</code>). You can find it in three ways:</p>
+  <ul>
+    <li>Your router's app or web page lists a device called <b>ffbridge</b>.</li>
+    <li>Turn the board off, put the SD card in your computer and open <code>MY-BRIDGE-ADDRESS.txt</code> on the FFBRIDGE drive.</li>
+    <li>The same file, <code>WIFI-STATUS.txt</code>, shows the address once the board is online.</li>
+  </ul>
+  <h3>If the Wi-Fi doesn't connect</h3>
+  <p>Turn the board off, put the SD card in your computer and open <code>WIFI-STATUS.txt</code> on the FFBRIDGE drive. It says in plain words what went wrong — for example “wrong password”, “can't see a network called …”, a stray space in the name, or a password that's too short — and lists the Wi-Fi networks the board can see. Fix <code>ffbridge-config.txt</code> and start the board again.</p>
+  <h3>The setup hotspot</h3>
+  <p>If the board has no network about 90 seconds after starting, it makes its own Wi-Fi network:</p>
+  <table>
+    <tr><td>Network name</td><td><b>FlashForge-Bridge-XXXX</b> (last 4 characters differ per board)</td></tr>
+    <tr><td>Password</td><td><b>flashforge</b></td></tr>
+    <tr><td>Page address</td><td><code>http://10.42.0.1</code> (phones usually open it by themselves)</td></tr>
+  </table>
+  <p>Connect your phone to it, open <b>Settings → Wi-Fi</b>, pick your home network and type the password. Your phone then loses the hotspot — reconnect it to your home Wi-Fi and open <code>http://ffbridge.local</code>. If the hotspot comes back after about a minute, the details were wrong: connect to it again and the Wi-Fi tab shows why.</p>
+  <p>Every 5 minutes the board tries your saved Wi-Fi again (in case the router was off), but never while a phone is connected to the hotspot.</p>
+  <div class="tip">A network cable to your router always works and needs no setup.</div>
+</section>
+
+<section data-topic="connect" data-title="Connect your printer" data-group="Getting started">
+  <h3>1. Turn on LAN-only mode on the printer</h3>
+  <p>On the printer's touch screen open <b>Settings → Network</b> (Wi-Fi or Ethernet) and turn on <b>LAN-only mode</b>. The printer now shows an 8-character <b>pairing code</b> (also called check code). Keep that screen open.</p>
+  <h3>2. Find the printer</h3>
+  <p>Open <b>Settings (gear) → Advanced → Printer connection</b> and press <b>Scan network</b>. Your printer appears under “Found on your network”. Press it.</p>
+  <figure><img src="help/img/connect-page.jpg" alt="Printer connection page" loading="lazy"><figcaption>Settings → Advanced → Printer connection</figcaption></figure>
+  <h3>3. Enter the pairing code</h3>
+  <p>Type the code from the printer screen, press <b>Test connection</b> and then <b>Save</b>. The printer screen of the bridge opens.</p>
+  <figure><img src="help/img/add-printer.jpg" alt="Add printer window" loading="lazy" style="max-width:520px"><figcaption>If the scan finds nothing, press <b>Add manually</b> and type the IP address shown on the printer (Settings → Network).</figcaption></figure>
+  <h3>Good to know</h3>
+  <ul>
+    <li><b>More options</b> in this window: serial number (found by the scan), the port for OrcaSlicer/Mainsail, a different camera address, “Level the bed before each print”, and “Clear the platform automatically”.</li>
+    <li><b>More than one printer?</b> See <a href="#help/multi">Several printers</a>.</li>
+    <li>Give the printer a fixed address in your router (often called “DHCP reservation”) so it keeps the same IP.</li>
+  </ul>
+</section>
+
+<section data-topic="multi" data-title="Several printers" data-group="Getting started">
+  <p>One board can run several printers. Add each one in <b>Settings → Advanced → Printer connection</b>.</p>
+  <h3>On this screen</h3>
+  <p>Each printer gets a tab at the top showing its name and status — tap one to switch. On a phone, the tabs become a drop-down list at the top instead.</p>
+  <h3>In OrcaSlicer and Mainsail</h3>
+  <p>Each printer gets its <b>own port</b>: the first uses <code>7125</code>, the second <code>7126</code>, and so on. In OrcaSlicer, set up one printer per machine, each with its own address (for example <code>ffbridge.local:7125</code> and <code>ffbridge.local:7126</code>). The slicer then sends each file to the right printer by itself. The addresses are listed in <b>Settings → Advanced → Mainsail &amp; OrcaSlicer</b>.</p>
+  <div class="tip">AI failure detection, auto clear platform and filament slots are set per printer.</div>
+</section>
+
+<section data-topic="screen" data-title="The printer screen" data-group="Using it">
+  <figure><img src="help/img/home-annotated.jpg" alt="The printer screen with numbered parts" loading="lazy"></figure>
+  <table>
+    <tr><td><span class="key">1</span></td><td><b>Printer tab</b> — name and status. With several printers, tap a tab to switch.</td></tr>
+    <tr><td><span class="key">2</span></td><td><b>Help</b> — this page.</td></tr>
+    <tr><td><span class="key">3</span></td><td><b>Settings</b> — General, Wi-Fi and Advanced (printer connection, AI, Mainsail, system).</td></tr>
+    <tr><td><span class="key">4</span></td><td><b>Status</b> — Ready, Printing %, Paused, Finished, Offline…</td></tr>
+    <tr><td><span class="key">5</span></td><td><b>AI status</b> — whether AI failure detection is watching this print. See <a href="#help/ai">AI failure detection</a>.</td></tr>
+    <tr><td><span class="key">6</span></td><td><b>Light</b> and <b>full screen</b> camera.</td></tr>
+    <tr><td><span class="key">7</span></td><td><b>Current job</b> — picture, progress, layer, time left and finish time.</td></tr>
+    <tr><td><span class="key">8</span></td><td><b>Job buttons</b> — Pause / Resume / Stop while printing; <b>Print a file</b> and <b>Clear platform</b> otherwise.</td></tr>
+    <tr><td><span class="key">9</span></td><td><b>Filament slots</b> (AD5X / Creator 5) — tap one to change its material or colour.</td></tr>
+    <tr><td><span class="key">10</span></td><td><b>Temperatures</b> — tap one to set it.</td></tr>
+    <tr><td><span class="key">11</span></td><td><b>Controls</b> — light, auto clear platform, filtration; speed, Z-offset and fans while printing.</td></tr>
+  </table>
+  <figure class="phone"><img src="help/img/home-phone.jpg" alt="The printer screen on a phone" loading="lazy"><figcaption>On a phone everything is stacked: camera first, then the job, filament, temperatures and controls.</figcaption></figure>
+  <div class="tip">Tip: on a phone, use your browser's “Add to home screen” to get an app-like icon for this page.</div>
+</section>
+
+<section data-topic="printing" data-title="Printing a file" data-group="Using it">
+  <ol>
+    <li>Press <b>Print a file</b> on the printer screen.</li>
+    <li>Pick a file from the list, or press <b>Upload a sliced file</b> (or drag one onto it) to add a <code>.gcode</code> / <code>.gcode.3mf</code> from your computer or phone.</li>
+    <li>Check the filaments (multi-colour printers), tick <b>Level the bed before printing</b> if you want, and press <b>Start print</b>.</li>
+  </ol>
+  <figure><img src="help/img/files.jpg" alt="File list" loading="lazy"><figcaption>The coloured dots show which filament colours the file uses. “On the printer” files were sent to the printer some other way (FlashPrint, the printer's own storage).</figcaption></figure>
+  <figure><img src="help/img/print-dialog.jpg" alt="Print window with filament matching" loading="lazy" style="max-width:640px"><figcaption>The print window. For multi-colour files it shows which slot each filament will use — see <a href="#help/colours">Multi-colour prints</a>.</figcaption></figure>
+  <p>Files have to be <b>sliced</b> already (OrcaSlicer, FlashPrint, Orca-FlashForge). The bridge does not slice models.</p>
+  <p><b>Delete</b> removes a file from the board only. Files stored on the printer itself can only be deleted on the printer's screen.</p>
+</section>
+
+<section data-topic="colours" data-title="Multi-colour prints" data-group="Using it">
+  <p>On the AD5X and Creator 5, each filament in the slicer file has to be matched to one of the 4 slots. The bridge does this the way the printer does:</p>
+  <ul>
+    <li>It prefers a slot with the <b>same material</b> (PLA, PETG, …), then the <b>closest colour</b>.</li>
+    <li>Each row shows a verdict: <b style="color:var(--ok)">Match</b>, <b style="color:var(--warn)">Close colour</b>, <b style="color:var(--warn)">Different colour</b> or <b style="color:var(--err)">Different material!</b></li>
+    <li>Tap a slot button in a row to change it.</li>
+  </ul>
+  <h3>Prints sent from OrcaSlicer</h3>
+  <p>If everything matches, the print starts straight away. If something doesn't match, the print waits and this window pops up on the printer screen (and in Mainsail):</p>
+  <figure class="phone"><img src="help/img/pending-phone.jpg" alt="Waiting to print window on a phone" loading="lazy"><figcaption>Choose the slots, then <b>Start print</b> — or <b>Cancel this print</b>. Closing the window with ✕ keeps the print waiting; the yellow bar on the printer screen opens it again.</figcaption></figure>
+  <h3>Always ask?</h3>
+  <p>In <b>Settings → General → Multi-colour prints</b> you can choose “Always ask me before a multi-colour print starts”.</p>
+  <div class="tip">Keep the slot colours right (tap a slot on the printer screen) — matching is only as good as what the printer thinks is loaded.</div>
+</section>
+
+<section data-topic="orcaslicer" data-title="Sending from OrcaSlicer" data-group="Using it">
+  <p>OrcaSlicer can send prints to the bridge as if it were a Klipper printer.</p>
+  <ol>
+    <li>In OrcaSlicer, select your printer and click the <b>Wi-Fi / connection icon</b> next to it (“Physical printer” settings).</li>
+    <li><b>Host type:</b> <code>Octo/Klipper</code></li>
+    <li><b>Hostname, IP or URL:</b> the address shown in <b>Settings → Advanced → Mainsail &amp; OrcaSlicer</b>, for example <code>192.168.1.57:7125</code>. Press <b>Copy</b> there and paste it.</li>
+    <li>Leave the API key empty and press <b>Test</b>. Then <b>OK</b>.</li>
+  </ol>
+  <figure><img src="help/img/orca.jpg" alt="Mainsail and OrcaSlicer page" loading="lazy"><figcaption>Settings → Advanced → Mainsail &amp; OrcaSlicer</figcaption></figure>
+  <ul>
+    <li>After slicing, use <b>Print</b> to send and start, or <b>Send</b> to only upload (start it later from <b>Print a file</b>).</li>
+    <li>Multi-colour prints that need your OK pop up on the printer screen — see <a href="#help/colours">Multi-colour prints</a>.</li>
+    <li>OrcaSlicer's <b>Device</b> tab shows Mainsail for this printer.</li>
+    <li>With a second printer, use its own port (7126, …).</li>
+  </ul>
+</section>
+
+<section data-topic="clear" data-title="Clear platform" data-group="Using it">
+  <p>After every print, FlashForge printers show a “print finished” message and refuse to start the next print until the plate is confirmed clear.</p>
+  <figure><img src="help/img/finished-card.jpg" alt="Finished print with the Clear platform button" loading="lazy"><figcaption>Take the print off, then press <b>Clear platform</b>. The button is always there when the printer isn't printing.</figcaption></figure>
+  <h3>Auto clear platform</h3>
+  <p>Turn on <b>Auto clear platform</b> under Controls (or in the printer's settings) and the bridge clears the message by itself about 8 seconds after a print finishes or is cancelled. It does not clear after a printer error, so you still see what went wrong.</p>
+  <div class="warn">With auto clear on, a print started from your phone or OrcaSlicer could begin on a plate that still has a part on it. Take finished prints off promptly.</div>
+  <p>Starting a print from the bridge also clears a finished job first, so you only need the button when starting from the printer's own screen.</p>
+</section>
+
+<section data-topic="filament" data-title="Filament slots" data-group="Using it">
+  <p>On the AD5X and Creator 5 the <b>Filament</b> card shows the 4 slots of the material station. A blue frame marks the slot in use while printing.</p>
+  <figure><img src="help/img/slot-dialog.jpg" alt="Slot window" loading="lazy" style="max-width:400px"><figcaption>Tap a slot, pick the material and colour, then <b>Save</b>.</figcaption></figure>
+  <ul>
+    <li>The colours are the printer's own colour list — the printer only accepts these.</li>
+    <li>AD5X: the slot window also has <b>Load filament</b> and <b>Unload filament</b>.</li>
+    <li>Adventurer 5M / 5M Pro have no material station, so this card is hidden.</li>
+  </ul>
+</section>
+
+<section data-topic="controls" data-title="Temperatures and controls" data-group="Using it">
+  <h3>Temperatures</h3>
+  <p>Tap a temperature to set it. Quick buttons fill in typical values; <b>Off</b> turns the heater off.</p>
+  <figure><img src="help/img/temp-dialog.jpg" alt="Set temperature window" loading="lazy" style="max-width:400px"></figure>
+  <p>Orange numbers are still heating up. The Creator 5 shows each of its 4 nozzles; the chamber only appears on printers that report it.</p>
+  <h3>Controls</h3>
+  <table>
+    <tr><td>Light</td><td>The printer's light. Also the bulb button on the camera.</td></tr>
+    <tr><td>Auto clear platform</td><td>See <a href="#help/clear">Clear platform</a>.</td></tr>
+    <tr><td>Filtration</td><td>Creator 5 / 5M Pro: inside = recirculate through the filter, exhaust = blow air out.</td></tr>
+    <tr><td>Print speed</td><td>While printing only: 50–150 %.</td></tr>
+    <tr><td>Z-offset</td><td>While printing only: − squishes the first layers more, + less. Small steps (0.01 mm).</td></tr>
+    <tr><td>Fans</td><td>While printing only: part cooling and chamber fan.</td></tr>
+  </table>
+  <p>Moving the axes and editing printer.cfg are not possible: FlashForge printers don't allow that over the network.</p>
+</section>
+
+<section data-topic="ai" data-title="AI failure detection" data-group="Advanced">
+  <p>While a print runs, the board looks at a camera picture every 10 seconds with Obico's open-source AI model, which recognises “spaghetti” and similar failures. Everything runs on the board — no pictures leave your network.</p>
+  <figure><img src="help/img/ai.jpg" alt="AI failure detection settings" loading="lazy"><figcaption>Settings → Advanced → AI failure detection</figcaption></figure>
+  <h3>Settings</h3>
+  <ul>
+    <li><b>On / off</b> for everything (top switch) and per printer (switch on each printer's card).</li>
+    <li><b>Alert me</b> — shows a red bar on the printer screen, a pop-up in Mainsail and (if set up) a Discord message with a picture.</li>
+    <li><b>Alert me and pause the print</b> — also pauses. Pausing needs a stronger signal than an alert, so you always get the warning first.</li>
+    <li><b>Sensitivity</b> — High catches problems sooner but gives more false alarms.</li>
+  </ul>
+  <h3>Good to know</h3>
+  <ul>
+    <li>The first few minutes of each print are a warm-up: the AI learns what “normal” looks like before it can alert.</li>
+    <li><b>Not a failure</b> (red bar or AI page) mutes alerts for the rest of that print.</li>
+    <li><b>Test now</b> analyses one picture and shows what the AI saw, with boxes around suspicious areas.</li>
+    <li>Good lighting helps: turn the printer light on.</li>
+  </ul>
+</section>
+
+<section data-topic="notifications" data-title="Discord and Spoolman" data-group="Advanced">
+  <figure><img src="help/img/general.jpg" alt="General settings" loading="lazy"><figcaption>Settings → General</figcaption></figure>
+  <h3>Discord notifications</h3>
+  <ol>
+    <li>In Discord, open your server's <b>Server Settings → Integrations → Webhooks → New Webhook</b>.</li>
+    <li>Pick the channel, then <b>Copy Webhook URL</b>.</li>
+    <li>Paste it into <b>Discord webhook URL</b>, choose what you want to hear about and press <b>Save</b>. <b>Send test message</b> checks it.</li>
+  </ol>
+  <p>“Progress update every N minutes” sends a progress message (with a camera picture if ticked) while printing; 0 = only events.</p>
+  <h3>Spoolman</h3>
+  <p>If you run a <a href="https://github.com/Donkie/Spoolman" target="_blank" rel="noopener">Spoolman</a> server, enter its address. Filament use is taken off the active spool when a print ends.</p>
+</section>
+
+<section data-topic="mainsail" data-title="Mainsail" data-group="Advanced">
+  <p>Each printer also has a full <b>Mainsail</b> page (the well-known Klipper web interface), on its own port: <code>http://ffbridge.local:7125</code> for the first printer. Links are in <b>Settings → Advanced → Mainsail &amp; OrcaSlicer</b>.</p>
+  <p>Mainsail runs separately from this screen and is mainly there because OrcaSlicer's Device tab shows it. Because FlashForge printers aren't Klipper printers, many of its panels do nothing (moving axes, macros, printer.cfg). Everything that works is also on this screen.</p>
+</section>
+
+<section data-topic="system" data-title="Board settings and safety" data-group="Advanced">
+  <ul>
+    <li><b>Password for this page</b> (Advanced → System): optional. Without it, anyone on your home network can open this page. Any user name works with the password.</li>
+    <li><b>Restart / Shut down</b> the board. Running prints are not affected. After shutting down, unplug and re-plug the power to start it again.</li>
+    <li><b>Log</b>: what the bridge did recently — useful when something doesn't work.</li>
+    <li><b>Board name</b> (Wi-Fi tab): with more than one bridge, rename one (e.g. <code>ffbridge2</code>) so each has its own address.</li>
+  </ul>
+  <h3>Other settings in ffbridge-config.txt</h3>
+<pre>wifi_country=US          two-letter country code for Wi-Fi channels
+wifi_hidden=no           yes if your Wi-Fi network is hidden
+hostname=ffbridge        board name (http://NAME.local)
+printer_ip=              add a printer without the setup page …
+printer_code=            … with its pairing code
+printer_name=
+timezone=                e.g. America/New_York
+ssh=no                   advanced: remote login as user "ffadmin"
+ssh_password=            at least 6 characters</pre>
+  <p>Changes in the file are applied the next time the board starts.</p>
+</section>
+
+<section data-topic="trouble" data-title="Troubleshooting" data-group="Advanced">
+  <table>
+    <tr><th>Problem</th><th>What to do</th></tr>
+    <tr><td>ffbridge.local doesn't open</td><td>Use the number address (router, or <code>MY-BRIDGE-ADDRESS.txt</code> on the SD card). Check your phone is on the same Wi-Fi, not mobile data. See <a href="#help/wifi">Wi-Fi</a>.</td></tr>
+    <tr><td>Board doesn't join Wi-Fi</td><td>Read <code>WIFI-STATUS.txt</code> on the SD card. Use the setup hotspot to fix it, or a network cable.</td></tr>
+    <tr><td>Printer “Offline”</td><td>Printer on? LAN-only mode still on? Same network? Has its IP address changed? Check in Advanced → Printer connection → Edit → Test connection.</td></tr>
+    <tr><td>“The printer refused the pairing code”</td><td>The code changes when LAN-only mode is switched off and on. Read it again on the printer.</td></tr>
+    <tr><td>Next print won't start</td><td>Press <b>Clear platform</b>, or turn on Auto clear platform.</td></tr>
+    <tr><td>No camera picture</td><td>Press <b>Try again</b>. Check the printer's camera is enabled on its screen. The printer's camera can only feed a few viewers at once — close other camera views (FlashPrint, slicer device tabs).</td></tr>
+    <tr><td>OrcaSlicer test fails</td><td>Host type must be Octo/Klipper; address with <code>:7125</code>; no API key.</td></tr>
+    <tr><td>AI says “starting” for a long time</td><td>The model loads for about a minute after the board starts. If it stays, restart the board (Advanced → System).</td></tr>
+    <tr><td>Something else</td><td>Advanced → System → Log shows what happened. Restarting the board fixes most hiccups and doesn't affect running prints.</td></tr>
+  </table>
+</section>
