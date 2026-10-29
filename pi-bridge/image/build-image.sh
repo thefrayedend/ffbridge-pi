@@ -207,13 +207,20 @@ install -m 755 "$BRIDGE_BIN" "$MNT/opt/ffbridge/bin/pibridge"
 python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
   "$REPO/android-tv-app/source/assets/mainsail.zip" "$MNT/opt/ffbridge/mainsail"
 echo "2.19.0" > "$MNT/opt/ffbridge/mainsail/.ffbridge_version"
-rsync -a --delete "$PIB/bridge/web/" "$MNT/opt/ffbridge/setup-web/"
+rsync -a --chown=root:root --delete "$PIB/bridge/web/" "$MNT/opt/ffbridge/setup-web/"
 install -m 644 "$PIB/ai/ffai_server.py" "$PIB/ai/requirements.txt" "$MNT/opt/ffbridge/ai/"
 install -m 644 "$MODEL" "$MNT/opt/ffbridge/ai/model/model-weights.onnx"
 install -m 644 "$PIB/LICENSES.txt" "$MNT/opt/ffbridge/LICENSES.txt" 2>/dev/null || true
-rsync -a --exclude '__pycache__' "$HERE/rootfs/" "$MNT/"
+# --chown: the files must belong to root on the board. Without it they keep the owner they had on
+# the build computer, and sudo then refuses to run ("/etc/sudoers.d is owned by uid 1001").
+rsync -a --chown=root:root --exclude '__pycache__' "$HERE/rootfs/" "$MNT/"
 chmod 440 "$MNT/etc/sudoers.d/ffbridge"
 chmod 755 "$MNT/usr/local/sbin/ffbridge-helper"
+# Safety check: system folders and files from this build must be owned by root.
+BAD="$(find "$MNT/" "$MNT/etc" "$MNT/usr" "$MNT/opt/ffbridge" -maxdepth 0 ! -uid 0 2>/dev/null; \
+       find "$MNT/etc" "$MNT/usr/local" "$MNT/opt/ffbridge" ! -uid 0 2>/dev/null | head -20)"
+[ -z "$BAD" ] || die "these files are not owned by root (sudo on the board would stop working):
+$BAD"
 git -C "$REPO" describe --always --dirty > "$MNT/opt/ffbridge/BUILD" 2>/dev/null || date -u +%Y%m%d > "$MNT/opt/ffbridge/BUILD"
 # Fingerprint of the parts only a new image can change (see image-hash.sh / one-click updates).
 bash "$HERE/image-hash.sh" > "$MNT/opt/ffbridge/IMAGE_HASH"
