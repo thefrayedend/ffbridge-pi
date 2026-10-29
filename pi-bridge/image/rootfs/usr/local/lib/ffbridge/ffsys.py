@@ -26,7 +26,11 @@ WIFI_CON = "ffbridge-wifi"
 HOTSPOT_CON = "ffbridge-hotspot"
 HOTSPOT_PASSWORD = "flashforge"
 SCAN_CACHE = os.path.join(STATE_DIR, "wifi-scan.json")
+LAST_ERROR = os.path.join(STATE_DIR, "wifi-last-error.json")
+STATUS_FILE = os.path.join(SETUP_DIR, "WIFI-STATUS.txt")
 ADMIN_USER = "ffadmin"
+RETRY_EVERY = 300        # retry the saved Wi-Fi every 5 min while the setup hotspot is on ...
+MAX_DEFER = 1800         # ... but not while a phone is connected to the hotspot (at most 30 min)
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -192,6 +196,8 @@ def apply_config():
             time.sleep(1)
         r = wifi_configure(ssid, cfg.get("wifi_password", ""), hidden=truthy(cfg.get("wifi_hidden", "no")), connect=False)
         log(r.get("message", ""))
+        if r.get("ok"):
+            clear_wifi_error()  # new details: forget the previous attempt's problem
         complete = r.get("ok", False)
 
     tz = cfg.get("timezone", "")
@@ -217,7 +223,13 @@ def apply_config():
 def wifi_configure(ssid, password, hidden=False, connect=True, timeout=45):
     dev = wifi_device()
     if not dev:
+        save_wifi_error(ssid, "nohw", "No Wi-Fi hardware found on this board.")
         return {"ok": False, "message": "No Wi-Fi hardware found on this board."}
+    if password and not (8 <= len(password) <= 63 or re.fullmatch(r"[0-9a-fA-F]{64}", password)):
+        msg = (f"The Wi-Fi password has {len(password)} characters. Wi-Fi passwords are 8 to 63 characters long, "
+               "so it must be mistyped.")
+        save_wifi_error(ssid, "password", msg)
+        return {"ok": False, "message": msg}
     run(["nmcli", "radio", "wifi", "on"])
     run(["nmcli", "connection", "delete", WIFI_CON])
     args = ["nmcli", "connection", "add", "type", "wifi", "con-name", WIFI_CON, "ifname", dev, "ssid", ssid,
@@ -228,7 +240,9 @@ def wifi_configure(ssid, password, hidden=False, connect=True, timeout=45):
         args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password]
     r = run(args)
     if r.returncode != 0:
-        return {"ok": False, "message": "Could not save the Wi-Fi settings: " + (r.stderr or r.stdout).strip()}
+        msg = "Could not save the Wi-Fi settings: " + (r.stderr or r.stdout).strip()
+        save_wifi_error(ssid, "save", msg)
+        return {"ok": False, "message": msg}
     if not connect:
         return {"ok": True, "message": f"Wi-Fi \"{ssid}\" saved."}
     was_hotspot = hotspot_active()
@@ -238,15 +252,211 @@ def wifi_configure(ssid, password, hidden=False, connect=True, timeout=45):
     r = run(["nmcli", "--wait", str(timeout), "connection", "up", WIFI_CON], timeout=timeout + 15)
     if r.returncode == 0:
         time.sleep(2)
+        clear_wifi_error()
         return {"ok": True, "message": f"Connected to \"{ssid}\" ({ipv4_of(dev) or 'getting an address'}).", "ip": ipv4_of(dev)}
-    msg = (r.stderr or r.stdout).strip()
-    if "Secrets were required" in msg or "802-1x" in msg or "psk" in msg.lower():
-        msg = "Wrong Wi-Fi password."
-    elif "No network with SSID" in msg:
-        msg = f"Network \"{ssid}\" not found. Check the name (upper/lower case matters) and that the router is in range."
+    kind, msg = explain_failure((r.stderr or r.stdout).strip(), ssid)
+    save_wifi_error(ssid, kind, msg)
     if was_hotspot:
         start_hotspot()
     return {"ok": False, "message": "Could not connect: " + msg}
+
+
+# ----------------------------------------------------------------------------- Wi-Fi problems
+# Why the saved Wi-Fi didn't connect, in words a beginner understands. The reason comes from
+# nmcli's error text or NetworkManager's log; the Wi-Fi scan tells "name not found" apart.
+def explain_failure(text, ssid=""):
+    t = (text or "").lower()
+    if any(k in t for k in ("secrets were required", "no-secrets", "supplicant-disconnect", "need-auth", "802-1x", "psk")):
+        return "password", "The Wi-Fi password was rejected (wrong password)."
+    if "supplicant-timeout" in t:
+        return "password", ("The router didn't accept the board. Usually that's a wrong password; "
+                            "sometimes the signal is too weak.")
+    if "no network with ssid" in t or "ssid-not-found" in t:
+        return "notfound", f"The board can't see a Wi-Fi network called \"{ssid}\"."
+    if "ip-config-unavailable" in t or "dhcp" in t:
+        return "noaddress", "The board joined the Wi-Fi but the router didn't give it an address."
+    if "timeout" in t or "timed out" in t:
+        return "other", "Connecting took too long (weak signal, or a wrong password)."
+    return "other", ("Could not connect" + (f": {text.strip()}" if text and text.strip() else "."))
+
+
+def save_wifi_error(ssid, kind, message):
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(LAST_ERROR, "w") as f:
+            json.dump({"ssid": ssid, "kind": kind, "message": message, "time": time.strftime("%Y-%m-%d %H:%M")}, f)
+    except OSError:
+        pass
+
+
+def load_wifi_error():
+    try:
+        return json.load(open(LAST_ERROR))
+    except (OSError, ValueError):
+        return None
+
+
+def clear_wifi_error():
+    try:
+        os.remove(LAST_ERROR)
+    except OSError:
+        pass
+
+
+def nm_failure_reason():
+    """Most recent 'failed (reason ...)' of the Wi-Fi device in NetworkManager's log this boot."""
+    dev = wifi_device() or "wlan"
+    r = run(["journalctl", "-u", "NetworkManager", "-b", "-o", "cat", "--no-pager", "-n", "600"], timeout=20)
+    reason = ""
+    for line in r.stdout.splitlines():
+        if f"({dev})" in line or "ffbridge-wifi" in line:
+            m = re.search(r"-> failed \(reason '([a-z0-9-]+)'", line)
+            if m:
+                reason = m.group(1)
+    return reason
+
+
+def saved_wifi():
+    """(name, password length) of the saved Wi-Fi, or ('', 0) when none is saved."""
+    r = run(["nmcli", "-s", "-g", "802-11-wireless.ssid,802-11-wireless-security.psk", "connection", "show", WIFI_CON])
+    if r.returncode != 0:
+        return "", 0
+    lines = r.stdout.split("\n")
+    return (lines[0] if lines else ""), (len(lines[1]) if len(lines) > 1 else 0)
+
+
+def cached_networks():
+    try:
+        return json.load(open(SCAN_CACHE))
+    except (OSError, ValueError):
+        return []
+
+
+def diagnose_wifi(ssid, psk_len, nets, last_error=None, nm_reason=""):
+    """Returns (problem, what-to-do) for a saved Wi-Fi that isn't connected."""
+    fix_file = "Fix it in ffbridge-config.txt on the SD card, or on the setup page (Wi-Fi tab)."
+    if ssid != ssid.strip():
+        return (f"The Wi-Fi name \"{ssid}\" has a space at the start or end.",
+                "Remove the extra space after wifi_name= . " + fix_file)
+    if 0 < psk_len < 8 or psk_len > 64:
+        return (f"The password has {psk_len} characters. Wi-Fi passwords are 8 to 63 characters, so it's mistyped.",
+                "Type the password again after wifi_password= . " + fix_file)
+    names = [n.get("ssid", "") for n in nets]
+    if names and ssid not in names:
+        close = [n for n in names if n.strip().lower() == ssid.strip().lower()]
+        if close:
+            return (f"The board can't see \"{ssid}\", but it can see \"{close[0]}\".",
+                    "Upper and lower case matter: type the name exactly as shown. " + fix_file)
+        return (f"The board can't see a Wi-Fi network called \"{ssid}\".",
+                "Check the spelling (upper/lower case matters) against the list below. If your network isn't "
+                "in the list, the board may be too far from the router. " + fix_file)
+    if last_error and last_error.get("ssid") == ssid and last_error.get("kind") not in (None, "", "other"):
+        kind, msg = last_error["kind"], last_error["message"]
+    elif nm_reason:
+        kind, msg = explain_failure(nm_reason, ssid)
+    elif last_error and last_error.get("ssid") == ssid:
+        kind, msg = last_error.get("kind", "other"), last_error.get("message", "")
+    else:
+        kind, msg = "other", ""
+    if kind == "password" or (not msg and names):
+        return (msg or f"\"{ssid}\" is in range, but the board couldn't join it. That almost always means a wrong password.",
+                f"The password you typed has {psk_len} characters - check it letter by letter "
+                "(upper/lower case matters). " + fix_file)
+    if kind == "noaddress":
+        return msg, "Restart your router and the board. If it keeps happening, the router may block new devices."
+    if kind == "notfound":
+        return msg, "Check the spelling (upper/lower case matters). " + fix_file
+    return (msg or "Not connected yet (the board is still trying).",
+            "Wait a few minutes. If it stays like this, check the Wi-Fi name and password. " + fix_file)
+
+
+def status_text(st, ssid, psk_len, cfg_ssid, problem, nets, clients=0):
+    """The contents of WIFI-STATUS.txt (without the time line)."""
+    host = st.get("hostname") or "ffbridge"
+    eth, wifi, hs = st["ethernet"], st["wifi"], st["hotspot"]
+    ips = [x for x in (eth.get("ip") if eth["connected"] else "", wifi.get("ip") if wifi["connected"] else "") if x]
+    L = []
+    if wifi["connected"]:
+        L += [f"GOOD: Connected to the Wi-Fi \"{wifi.get('ssid') or ssid}\"."]
+    elif eth["connected"]:
+        L += ["GOOD: Connected with a network cable."]
+    elif hs["active"]:
+        L += ["NOT CONNECTED to your home network."]
+    else:
+        L += ["Starting up / looking for your network..."]
+    if not wifi["connected"]:
+        if ssid and problem:
+            L += ["", f"Wi-Fi \"{ssid}\" did not connect.", f"  Problem:    {problem[0]}", f"  What to do: {problem[1]}"]
+        elif cfg_ssid and not ssid:
+            L += ["", f"Wi-Fi \"{cfg_ssid}\" from ffbridge-config.txt could not be saved.",
+                  f"  Problem:    {problem[0] if problem else 'unknown'}"]
+        elif not ssid and not eth["connected"]:
+            L += ["", "No Wi-Fi is set up yet: wifi_name= in ffbridge-config.txt is empty.",
+                  "  What to do: type your Wi-Fi name and password into ffbridge-config.txt on the SD card,",
+                  "              or plug the board into your router with a network cable."]
+    L += [""]
+    if ips:
+        L += ["Setup page:  http://" + host + ".local"] + [f"         or  http://{ip}" for ip in ips]
+    if hs["active"]:
+        L += ["Setup Wi-Fi hotspot: ON",
+              f"  Connect a phone to the Wi-Fi \"{hs['ssid']}\" (password: {hs['password']}),",
+              "  then open http://10.42.0.1 and choose your home Wi-Fi there.",
+              f"  (Every {RETRY_EVERY // 60} minutes the board tries your saved Wi-Fi again, but not while"
+              " a phone is connected to the hotspot.)"]
+    L += ["", "Network cable: " + (f"connected ({eth['ip']})" if eth["connected"] else "not plugged in")]
+    if not wifi["present"]:
+        L += ["Wi-Fi: no Wi-Fi hardware found"]
+    if nets and not wifi["connected"]:
+        L += ["", "Wi-Fi networks the board can see (strongest first):"]
+        for n in nets[:15]:
+            bar = "strong" if n.get("signal", 0) >= 60 else "ok" if n.get("signal", 0) >= 35 else "weak"
+            L += [f"  \"{n.get('ssid', '')}\"  ({bar})"]
+    return "\n".join(L)
+
+
+def write_status_file(text, _last=[None]):
+    """Writes WIFI-STATUS.txt on the SD card's FFBRIDGE drive (only when something changed)."""
+    if text == _last[0] or not os.path.isdir(SETUP_DIR):
+        return
+    body = ("FlashForge Bridge - network status\n==================================\n"
+            f"Written: {time.strftime('%Y-%m-%d %H:%M')} (board clock - may be wrong until it's online)\n\n"
+            + text + "\n\n(The board rewrites this file whenever its network status changes.)\n")
+    try:
+        with open(STATUS_FILE, "w", newline="\r\n") as f:  # \r\n: Notepad-friendly
+            f.write(body)
+            f.flush()
+            os.fsync(f.fileno())
+        _last[0] = text
+    except OSError as e:
+        log(f"could not write {STATUS_FILE}: {e}")
+
+
+def hotspot_clients(dev):
+    """Number of phones/computers connected to the setup hotspot."""
+    if not dev:
+        return 0
+    r = run(["iw", "dev", dev, "station", "dump"])
+    if r.returncode == 0:
+        return sum(1 for line in r.stdout.splitlines() if line.startswith("Station "))
+    r = run(["ip", "neigh", "show", "dev", dev])
+    return sum(1 for line in r.stdout.splitlines() if line.startswith("10.42.") and re.search(r"REACHABLE|DELAY|PROBE", line))
+
+
+def update_status(clients=0):
+    st = net_status()
+    ssid, psk_len = saved_wifi()
+    cfg_ssid = parse_config().get("wifi_name") or ""
+    problem = None
+    if not st["wifi"]["connected"]:
+        err = load_wifi_error()
+        if ssid:
+            problem = diagnose_wifi(ssid, psk_len, cached_networks(), err, nm_failure_reason())
+        elif cfg_ssid and err:
+            problem = (err.get("message", ""), "Fix it in ffbridge-config.txt on the SD card.")
+    else:
+        clear_wifi_error()
+    write_status_file(status_text(st, ssid, psk_len, cfg_ssid, problem, cached_networks(), clients))
+    return problem
 
 
 def wifi_scan():
@@ -329,29 +539,57 @@ def start_hotspot():
 
 
 def hotspot_watch():
-    """Starts the setup hotspot when the board has no network ~90 s after boot; while it runs,
-    retries the saved Wi-Fi every 5 minutes (e.g. the router was off when the board started)."""
+    """Starts the setup hotspot when the board has no network ~90 s after boot. While it runs, the
+    saved Wi-Fi is retried every 5 minutes (e.g. the router was off when the board started), but
+    never while a phone is connected to the hotspot: retrying switches the hotspot off for up to a
+    minute, which would cut off someone who is using the setup page. Also keeps WIFI-STATUS.txt on
+    the SD card up to date, so a beginner can see why the Wi-Fi didn't connect."""
+    write_status_file("Starting up / looking for your network...")
     for _ in range(90):
         if has_network():
             break
         time.sleep(1)
     last_retry = time.time()
+    last_scan = 0.0
+    deferred = False
     while True:
+        clients = 0
         try:
+            now = time.time()
             if has_network():
                 if hotspot_active():
                     run(["nmcli", "connection", "down", HOTSPOT_CON])
+                # Online by cable but the saved Wi-Fi is failing: refresh the network list now and then
+                # so the status file can tell "name not found" from "wrong password".
+                ssid, _ = saved_wifi()
+                if ssid and not net_status()["wifi"]["connected"] and now - last_scan > 600:
+                    last_scan = now
+                    wifi_scan()
             elif not hotspot_active():
-                start_hotspot()
-                last_retry = time.time()
-            elif time.time() - last_retry > 300:
-                last_retry = time.time()
-                if run(["nmcli", "-t", "-f", "NAME", "connection", "show"]).stdout.count(WIFI_CON):
-                    log("retrying saved Wi-Fi")
-                    run(["nmcli", "connection", "down", HOTSPOT_CON])
-                    time.sleep(2)
-                    if run(["nmcli", "--wait", "30", "connection", "up", WIFI_CON], timeout=45).returncode != 0:
-                        start_hotspot()
+                start_hotspot()  # scans first, so the network list is fresh
+                last_retry = now
+            else:
+                clients = hotspot_clients(wifi_device())
+                if now - last_retry > RETRY_EVERY and saved_wifi()[0]:
+                    if clients and now - last_retry < MAX_DEFER:
+                        if not deferred:
+                            log(f"not retrying the saved Wi-Fi: {clients} device(s) connected to the setup hotspot")
+                            deferred = True
+                    else:
+                        deferred = False
+                        last_retry = now
+                        log("retrying saved Wi-Fi")
+                        run(["nmcli", "connection", "down", HOTSPOT_CON])
+                        time.sleep(2)
+                        r = run(["nmcli", "--wait", "30", "connection", "up", WIFI_CON], timeout=45)
+                        if r.returncode == 0:
+                            clear_wifi_error()
+                        else:
+                            ssid = saved_wifi()[0]
+                            kind, msg = explain_failure((r.stderr or r.stdout) + " " + nm_failure_reason(), ssid)
+                            save_wifi_error(ssid, kind, msg)
+                            start_hotspot()
+            update_status(clients)
         except Exception as e:  # noqa: BLE001
             log(f"hotspot-watch: {e}")
         time.sleep(15)
@@ -429,7 +667,14 @@ def main():
     elif cmd == "hotspot-watch":
         hotspot_watch()
     elif cmd == "net-status":
-        out(net_status())
+        st = net_status()
+        if not st["wifi"]["connected"]:
+            ssid, psk_len = saved_wifi()
+            err, reason = load_wifi_error(), nm_failure_reason()
+            if ssid and (err or reason):  # only once an attempt has actually failed
+                p = diagnose_wifi(ssid, psk_len, cached_networks(), err, reason)
+                st["wifi"].update({"savedSsid": ssid, "problem": p[0], "fix": p[1]})
+        out(st)
     elif cmd == "wifi-scan":
         out(wifi_scan())
     elif cmd == "wifi-connect" and args:
