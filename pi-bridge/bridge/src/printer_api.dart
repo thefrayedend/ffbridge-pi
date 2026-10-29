@@ -35,6 +35,7 @@ class PrinterApi {
       'coolingFan': d.coolingFanSpeed,
       'chamberFan': d.chamberFanSpeed,
       'errorCode': d.errorCode,
+      'error': b.currentError?.toJson(),
       'filamentWeight': d.estimatedRightWeight,
       'jobThumb': b.jobFile.isEmpty ? '' : thumbUrl(b, b.jobFile),
       'slots': [

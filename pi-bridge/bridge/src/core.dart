@@ -4,6 +4,7 @@
 // so the Pi build compiles the very same files (no copy that could drift apart).
 export '../../../android-tv-app/source/lib/core/bridge.dart';
 export '../../../android-tv-app/source/lib/core/config.dart';
+export '../../../android-tv-app/source/lib/core/errors.dart';
 export '../../../android-tv-app/source/lib/core/ff/discovery.dart';
 export '../../../android-tv-app/source/lib/core/ff/ff_client.dart';
 export '../../../android-tv-app/source/lib/core/ff/models.dart';

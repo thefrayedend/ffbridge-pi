@@ -6,12 +6,18 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'ai_monitor.dart';
+import 'backup.dart';
 import 'core.dart';
 import 'pi_config.dart';
 import 'printer_api.dart';
 import 'system_control.dart';
+import 'updater.dart';
 
-const piBridgeVersion = '1.0.0';
+/// Set by the GitHub build (-DFFB_VERSION=1.0.<build number>); "dev" for local builds.
+const piBridgeVersion = String.fromEnvironment('FFB_VERSION', defaultValue: 'dev');
+
+/// GitHub repository the update packages come from (-DFFB_REPO=owner/name); empty = no updates.
+const updateRepo = String.fromEnvironment('FFB_REPO', defaultValue: '');
 
 class SetupServer {
   final BridgeHost host;
@@ -20,11 +26,13 @@ class SetupServer {
   final SystemControl sys;
   final String webDir;
   final int port;
+  final Backup? backup;
+  final Updater? updater;
   HttpServer? _server;
   List<DiscoveredPrinter> _lastScan = [];
   late final PrinterApi printers = PrinterApi(host);
 
-  SetupServer({required this.host, required this.pi, required this.ai, required this.sys, required this.webDir, this.port = 80});
+  SetupServer({required this.host, required this.pi, required this.ai, required this.sys, required this.webDir, this.port = 80, this.backup, this.updater});
 
   Future<void> start() async {
     _ips = await SystemControl.localIps();
@@ -252,6 +260,44 @@ class SetupServer {
         return await _json(req, await sys.setHostname(name));
       }
 
+      // updates
+      if (p == 'update' && m == 'GET') return await _json(req, updater?.toJson() ?? {'configured': false, 'current': piBridgeVersion});
+      if (p == 'update/check' && m == 'POST' && updater != null) {
+        await updater!.check();
+        return await _json(req, updater!.toJson());
+      }
+      if (p == 'update/install' && m == 'POST' && updater != null) return await _json(req, await updater!.install());
+
+      // backup / restore
+      if (p == 'backup' && m == 'GET' && backup != null) {
+        final day = DateTime.now().toIso8601String().substring(0, 10);
+        req.response.headers
+          ..contentType = ContentType.json
+          ..set('Content-Disposition', 'attachment; filename="ffbridge-backup-$day.json"')
+          ..set('Cache-Control', 'no-store');
+        req.response.write(const JsonEncoder.withIndent(' ').convert(backup!.build()));
+        return await req.response.close();
+      }
+      if (p == 'backup/restore' && m == 'POST' && backup != null) {
+        Object? j;
+        try {
+          j = jsonDecode(await utf8.decodeStream(req));
+        } catch (_) {
+          return await _json(req, {'ok': false, 'message': 'That file could not be read. Pick the .json backup file.'});
+        }
+        final err = Backup.validate(j);
+        if (err != null) return await _json(req, {'ok': false, 'message': err});
+        backup!.restore(j as Map);
+        host.log.info('Settings restored from an uploaded backup (made ${j['created']}). Restarting the bridge.');
+        final managed = Platform.environment.containsKey('INVOCATION_ID'); // running under systemd
+        if (managed) Timer(const Duration(seconds: 1), () => exit(0)); // systemd starts it again with the restored settings
+        return await _json(req, {
+          'ok': true,
+          'restarting': managed,
+          'message': managed ? 'Settings restored. The bridge restarts — this page reloads in a few seconds.' : 'Settings restored. Restart the bridge to use them.',
+        });
+      }
+
       // system
       if (p == 'logs' && m == 'GET') return await _json(req, {'lines': host.log.lines.toList()});
       if (p == 'system/reboot' && m == 'POST') {
@@ -347,6 +393,7 @@ class SetupServer {
         'printers': [for (final c in host.config.printers) _printerJson(c, req)],
         'aiService': ai.service.toJson(),
         'aiEnabled': pi.ai.enabled,
+        'update': {'available': updater?.available ?? false, 'latest': updater?.latest?['version']},
       };
 
   Future<Map<String, dynamic>> _testPrinter(Map<String, dynamic> b) async {

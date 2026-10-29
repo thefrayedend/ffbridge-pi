@@ -44,6 +44,7 @@ class SystemControl {
   Future<Map<String, dynamic>> reboot() => _run(['reboot']);
   Future<Map<String, dynamic>> shutdown() => _run(['shutdown']);
   Future<Map<String, dynamic>> restartAi() => _run(['restart-ai']);
+  Future<Map<String, dynamic>> updateStart(String baseUrl) => _run(['update-start', baseUrl]);
   Future<Map<String, dynamic>> systemInfo() => _run(['system-info']);
 
   /// Local IPv4 addresses (ethernet / wifi first).
