@@ -10,6 +10,7 @@ class PrinterConfig {
   String checkCode;
   int port; // Moonraker/Mainsail port served by this app
   bool levelBeforePrint;
+  bool autoClearPlatform; // send "clear platform" by itself when a print ends
   String cameraUrl; // optional override (MJPEG); empty = auto
   bool enabled;
   String model;
@@ -22,6 +23,7 @@ class PrinterConfig {
     required this.checkCode,
     this.port = 7125,
     this.levelBeforePrint = false,
+    this.autoClearPlatform = false,
     this.cameraUrl = '',
     this.enabled = true,
     this.model = '',
@@ -35,6 +37,7 @@ class PrinterConfig {
         checkCode: j['checkCode'] ?? '',
         port: j['port'] ?? 7125,
         levelBeforePrint: j['levelBeforePrint'] ?? false,
+        autoClearPlatform: j['autoClearPlatform'] ?? false,
         cameraUrl: j['cameraUrl'] ?? '',
         enabled: j['enabled'] ?? true,
         model: j['model'] ?? '',
@@ -48,6 +51,7 @@ class PrinterConfig {
         'checkCode': checkCode,
         'port': port,
         'levelBeforePrint': levelBeforePrint,
+        'autoClearPlatform': autoClearPlatform,
         'cameraUrl': cameraUrl,
         'enabled': enabled,
         'model': model,
