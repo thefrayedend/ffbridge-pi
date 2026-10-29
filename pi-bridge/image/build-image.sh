@@ -217,8 +217,10 @@ rsync -a --chown=root:root --exclude '__pycache__' "$HERE/rootfs/" "$MNT/"
 chmod 440 "$MNT/etc/sudoers.d/ffbridge"
 chmod 755 "$MNT/usr/local/sbin/ffbridge-helper"
 # Safety check: system folders and files from this build must be owned by root.
-BAD="$(find "$MNT/" "$MNT/etc" "$MNT/usr" "$MNT/opt/ffbridge" -maxdepth 0 ! -uid 0 2>/dev/null; \
-       find "$MNT/etc" "$MNT/usr/local" "$MNT/opt/ffbridge" ! -uid 0 2>/dev/null | head -20)"
+# (Only what this build adds - the Orange Pi base image has a few vendor files of its own.)
+BAD="$(find "$MNT/" -maxdepth 0 ! -uid 0; find "$MNT/opt/ffbridge" ! -uid 0 | head -20
+       (cd "$HERE/rootfs" && find . -mindepth 1 -not -name '__pycache__' -not -path '*/__pycache__/*' -printf '%P\n') |
+         while read -r p; do [ "$(stat -c %u "$MNT/$p")" = 0 ] || echo "$MNT/$p"; done | head -20)"
 [ -z "$BAD" ] || die "these files are not owned by root (sudo on the board would stop working):
 $BAD"
 git -C "$REPO" describe --always --dirty > "$MNT/opt/ffbridge/BUILD" 2>/dev/null || date -u +%Y%m%d > "$MNT/opt/ffbridge/BUILD"
