@@ -260,6 +260,37 @@ ssh_password=            at least 6 characters</pre>
   <p>The same message goes to Discord if you use it.</p>
 </section>
 
+<section data-topic="layout" data-title="Screen layout" data-group="Using it">
+  <p>Settings → General → <b>Screen layout</b> changes how the printer screen is arranged:</p>
+  <ul>
+    <li><b>Camera size</b>: how much of the width the camera gets (50–85%). The side panel gets the rest, but never less than 300 pixels.</li>
+    <li><b>Side panel</b>: right, left, or always below the camera.</li>
+    <li><b>Print status card</b> (Print a file, Clear platform, progress, Pause/Stop): under the camera, or at the top of the side panel so it is always in view.</li>
+    <li><b>Keep the whole camera picture on screen</b>: on short or wide windows the camera gets smaller instead of making you scroll.</li>
+  </ul>
+  <p>The settings are saved in the browser you set them in, so your phone and your PC can each have their own. <b>Default</b> puts everything back. On phones everything is always in one column.</p>
+</section>
+
+<section data-topic="printernet" data-title="Printer network (router mode)" data-group="Advanced">
+  <p>An optional advanced mode. The board's Wi-Fi becomes a <b>private network just for your printers</b>, and the board connects to your home network with a <b>network cable</b>. The printers can't reach the internet and nothing on the internet can reach them. You keep using this page, Mainsail and OrcaSlicer exactly as before, because they all go through the board.</p>
+  <h3>Switching it on</h3>
+  <ol>
+    <li>Plug a network cable from your router into the board. Open this page and check Settings → Wi-Fi shows <i>Ethernet: Connected</i>.</li>
+    <li>Settings → Advanced → <b>Printer network</b>: choose a name and password for the printer Wi-Fi, press <b>Switch on</b>.</li>
+    <li>On each printer's screen, connect its Wi-Fi to that network. The bridge finds each printer at its new address by itself within about 2 minutes; the page lists the printers that joined.</li>
+  </ol>
+  <h3>Internet for the printers</h3>
+  <p>Blocked by default. For a printer firmware update, press <b>Allow for 1 hour</b> (or 4 hours, or until you turn it off). It switches itself off when the time is up; <b>Block now</b> ends it early.</p>
+  <h3>Good to know</h3>
+  <ul>
+    <li>FlashPrint, the FlashForge app and OrcaSlicer's own FlashForge connection can't reach the printers directly. Use OrcaSlicer's Klipper/Octo connection to the board (port 7125…) instead — see <a href="#help/orcaslicer">Sending from OrcaSlicer</a>.</li>
+    <li>The board's Wi-Fi antenna is small: keep the printers reasonably close to it.</li>
+    <li>The board gives the printers the time, so their clocks stay right without internet.</li>
+    <li>If you can't reach the page over the cable any more, connect a phone or laptop to the printer Wi-Fi and open <b>http://10.43.0.1</b>.</li>
+    <li><b>Switch off</b> puts the board back on your home Wi-Fi (if one is saved). Then connect the printers to your home Wi-Fi again on their screens.</li>
+  </ul>
+</section>
+
 <section data-topic="trouble" data-title="Troubleshooting" data-group="Advanced">
   <table>
     <tr><th>Problem</th><th>What to do</th></tr>
