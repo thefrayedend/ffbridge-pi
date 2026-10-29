@@ -10,11 +10,13 @@ import 'dart:async';
 import 'dart:io';
 
 import '../src/ai_monitor.dart';
+import '../src/backup.dart';
 import '../src/boot_config.dart';
 import '../src/core.dart';
 import '../src/pi_config.dart';
 import '../src/setup_server.dart';
 import '../src/system_control.dart';
+import '../src/updater.dart';
 
 const mainsailAssetVersion = '2.19.0';
 
@@ -53,16 +55,21 @@ Future<void> main(List<String> args) async {
   final aiUrl = Uri.parse(_arg(args, '--ai-url', 'http://127.0.0.1:3333'));
   final bootPartition = _arg(args, '--boot-partition', '');
 
+  final backup = Backup(data, piBridgeVersion);
+  final restored = backup.restoreFromBootDrive(bootPartition); // fresh SD card + backup file -> settings back
   final host = BridgeHost(data, mainsail);
   host.log.info('FlashForge Pi Bridge $piBridgeVersion starting (data=$data, setup port $setupPort)');
   final pi = PiConfig(data);
   final sys = SystemControl();
   final ai = AiMonitor(host, pi, aiUrl, host.log);
-  final setup = SetupServer(host: host, pi: pi, ai: ai, sys: sys, webDir: setupWeb, port: setupPort);
+  final updater = Updater(host.log, sys);
+  if (restored != null) host.log.info(restored);
+  final setup = SetupServer(host: host, pi: pi, ai: ai, sys: sys, webDir: setupWeb, port: setupPort, backup: backup, updater: updater);
 
   await host.startAll();
   await setup.start();
   if (!args.contains('--no-ai')) ai.start();
+  updater.start();
 
   BootConfig? boot;
   if (bootPartition.isNotEmpty) {
@@ -71,11 +78,13 @@ Future<void> main(List<String> args) async {
     Future<void> writeAddr() async => boot!.writeAddressFile(SystemControl.hostname(), await SystemControl.localIps());
     unawaited(writeAddr());
     Timer.periodic(const Duration(seconds: 30), (_) => writeAddr());
+    backup.keepCopyOn(bootPartition, host.log.warn);
   }
 
   Future<void> shutdown(ProcessSignal s) async {
     host.log.info('Stopping ($s)');
     ai.stop();
+    backup.flushNow(bootPartition);
     await setup.stop();
     await host.stopAll();
     exit(0);
