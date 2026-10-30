@@ -49,12 +49,13 @@ class Slicer {
     return rt.existsSync() ? {'LD_LIBRARY_PATH': '${rt.path}:$engineDir/lib'} : {};
   }
 
-  static bool? _hasNice;
   Future<Process> _start(List<String> args, String cwd) async {
-    _hasNice ??= File('/usr/bin/nice').existsSync();
+    // The engine's own C library path goes to the engine only: a system program started with it
+    // (nice, grep, ...) would load the wrong C library and crash.
+    final p = await Process.start(exe, args, workingDirectory: cwd, environment: _env);
     // Lower priority than the printer connections: a long slice never makes the printer screen lag.
-    if (_hasNice!) return Process.start('/usr/bin/nice', ['-n', '10', exe, ...args], workingDirectory: cwd, environment: _env);
-    return Process.start(exe, args, workingDirectory: cwd, environment: _env);
+    if (Platform.isLinux) Process.run('renice', ['-n', '10', '-p', '${p.pid}']).ignore();
+    return p;
   }
 
   Future<String> _runJson(List<String> args) async {
