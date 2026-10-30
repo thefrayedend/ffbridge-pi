@@ -21,8 +21,9 @@ setup page, Spoolman, Discord, and AI print-failure detection (Obico model, runs
 
 - **Slicer, built in** (Settings → General → Slicer → Download the slicer engine, once). New **Prepare · Paint · Preview** buttons in the top bar:
   - Prepare: add STL / OBJ / 3MF (MakerWorld, Bambu, Orca projects too), move / rotate / scale, lay on face, auto-orient, arrange, filament per object, quality profile + all print settings.
-  - Paint: brush colours onto models (painting from MakerWorld / Orca projects is kept).
   - Preview: slices on the board with the real OrcaSlicer engine and shows the print layer by layer (by filament or line type), print time and filament used. Print… goes straight into the filament check.
+  - Plates, like OrcaSlicer: several plates side by side (tabs over the 3D view), drag models between them or use "Move to", arrange spills onto the next plate, projects open with all their plates, and every plate is sliced / previewed / printed on its own ("Slice all plates" too).
+  - Paint tools like OrcaSlicer: circle, sphere, triangle, height range, fill with edge detection (smart fill) and gap fill, Shift to erase, section view, filament remap — for colours, support enforcers / blockers (with overhang highlighting) and seam enforcers / blockers.
   - Only the Flashforge profiles of the printer you have open can be used. A project made for another printer keeps its models and colours but never switches the printer or its settings.
   - Switch the slicer off in the same Settings card to hide it.
 - The bridge is now called **Flash Bridge** (the address http://ffbridge.local stays the same).
