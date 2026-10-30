@@ -29,6 +29,9 @@ jobs:
           BASE_FILE="$(ls -S base/* | head -1)"
           echo "BASE_FILE=$BASE_FILE" >> "$GITHUB_ENV"
 
+      - name: Get the 3D libraries for the slicer page (pinned, checksum-checked)
+        run: bash pi-bridge/slicer/fetch-web-vendor.sh
+
       - uses: dart-lang/setup-dart@v1
         with:
           sdk: stable
@@ -42,6 +45,7 @@ jobs:
           dart run test/errors_check.dart
           dart run test/backup_check.dart
           dart run test/finder_check.dart
+          dart run test/slicer_check.dart
           python3 ../image/test/wifi_status_check.py
           python3 ../image/test/update_check.py
           python3 ../image/test/printernet_check.py
@@ -51,7 +55,13 @@ jobs:
       - name: Install image tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fdisk dosfstools mtools e2fsprogs xz-utils rsync python3 curl p7zip-full util-linux
+          sudo apt-get install -y --no-install-recommends fdisk dosfstools mtools e2fsprogs xz-utils rsync python3 curl p7zip-full util-linux patchelf
+
+      - name: Build the slicer engine pack (downloaded by the board when the slicer is switched on)
+        run: |
+          bash pi-bridge/slicer/make-slicer-pack.sh --out "$GITHUB_WORKSPACE/slicer"
+          bash pi-bridge/slicer/test-slicer-pack.sh "$GITHUB_WORKSPACE/slicer"
+          ls -lh slicer
 
       - name: Download the AI model
         run: bash pi-bridge/ai/fetch-model.sh pi-bridge/ai/model/model-weights.onnx
@@ -75,5 +85,5 @@ jobs:
       - name: Publish it as the "Latest SD card image" release
         run: |
           gh release delete latest-image --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
-          gh release create latest-image out/* update/* --repo "$GITHUB_REPOSITORY" \
+          gh release create latest-image out/* update/* slicer/* --repo "$GITHUB_REPOSITORY" \
             --title "Latest SD card image" --notes-file pi-bridge/RELEASE-NOTES.md
