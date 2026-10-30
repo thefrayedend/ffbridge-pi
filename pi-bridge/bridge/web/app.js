@@ -1,4 +1,5 @@
-// FlashForge Bridge – printer screen + settings (plain JavaScript, no build step).
+// Flash Bridge – printer screen + settings (plain JavaScript, no build step).
+// The slicer (Prepare / Paint / Preview) is a separate module, web/slicer/slicer.js, loaded on first use.
 'use strict';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -82,7 +83,11 @@ function verdict(fil, slot) {
 // ---------------------------------------------------------------- routing
 function route() {
   const parts = (location.hash.slice(1) || 'home').split('/');
-  state.view = ['settings', 'help'].includes(parts[0]) ? parts[0] : 'home';
+  state.view = ['settings', 'help', 'slicer'].includes(parts[0]) ? parts[0] : 'home';
+  if (state.view === 'slicer' && !slicerOn()) { location.hash = '#home'; return; }
+  const mode = state.view === 'slicer' ? (['prepare', 'paint', 'preview'].includes(parts[1]) ? parts[1] : 'prepare') : (state.view === 'home' ? 'home' : '');
+  $$('#mode-tabs a').forEach((a) => a.classList.toggle('active', a.dataset.mode === mode));
+  document.documentElement.classList.toggle('in-slicer', state.view === 'slicer');
   if (state.view === 'help') showHelp(parts[1] || 'start');
   if (state.view === 'settings') {
     state.tab = ['general', 'network', 'advanced'].includes(parts[1]) ? parts[1] : 'general';
@@ -96,8 +101,10 @@ function route() {
   $$('#adv-tabs a').forEach((a) => a.classList.toggle('active', a.dataset.sub === state.sub));
   $$('.subpage').forEach((t) => t.classList.toggle('active', t.id === 'sub-' + state.sub));
   if (state.view === 'home') { setCamera(); renderHome(); } else stopCamera();
+  if (state.view === 'slicer') loadSlicer().then((m) => m && m.show(mode));
+  else if (slicerMod) slicerMod.hide();
   if (state.view === 'settings') {
-    if (state.tab === 'general') { loadSettings(); renderLayoutForm(); }
+    if (state.tab === 'general') { loadSettings(); renderLayoutForm(); loadSlicerSettings(); }
     if (state.tab === 'network') loadNetwork(true);
     if (state.tab === 'advanced') {
       if (state.sub === 'printers') renderPrinterList();
@@ -107,7 +114,23 @@ function route() {
       if (state.sub === 'system') { loadSystem(); loadLogs(); loadUpdate(); }
     }
   }
-  window.scrollTo(0, 0);
+  if (state.view !== 'slicer') window.scrollTo(0, 0);
+}
+
+// ---------------------------------------------------------------- slicer (lazy module)
+let slicerMod = null, slicerLoading = null;
+const slicerOn = () => !!(state.status && state.status.slicer && state.status.slicer.enabled);
+function loadSlicer() {
+  if (slicerMod) return Promise.resolve(slicerMod);
+  slicerLoading ??= import('./slicer/slicer.js').then((m) => { slicerMod = m; m.init(window.FFB); return m; }).catch((e) => {
+    slicerLoading = null;
+    toast('The slicer could not be loaded: ' + e.message, true);
+    return null;
+  });
+  return slicerLoading;
+}
+function showModeTabs() {
+  $('#mode-tabs').classList.toggle('hidden', !slicerOn() || !printers().length);
 }
 
 // ---------------------------------------------------------------- help
@@ -146,6 +169,8 @@ async function refreshStatus() {
     if (!s.printers) return;
     state.status = s;
     renderTabs();
+    showModeTabs();
+    if (state.view === 'slicer' && !slicerOn()) location.hash = '#home';
     $('#update-dot').classList.toggle('hidden', !(s.update && s.update.available));
     if (state.view === 'home') renderHome();
     if (state.view === 'settings' && state.tab === 'advanced') {
@@ -198,6 +223,7 @@ function renderTabs() {
 function selectPrinter(id) {
   state.sel = id;
   store.set('ffb.sel', state.sel);
+  if (state.view === 'slicer') { renderTabs(); if (slicerMod) slicerMod.printerChanged(); return; }
   if (state.view !== 'home') location.hash = '#home'; else { setCamera(); renderTabs(); renderHome(); }
 }
 $('#printer-tabs').addEventListener('click', (e) => {
@@ -1006,6 +1032,56 @@ $('#hn-form').addEventListener('submit', async (e) => {
 });
 
 // ---------------------------------------------------------------- settings: general
+// ---------------------------------------------------------------- settings: slicer
+let slicerPoll = null;
+async function loadSlicerSettings() {
+  const r = await api('slicer');
+  if (r.ok === false && r.enabled === undefined) { $('#slicer-card').classList.add('hidden'); return; }
+  $('#sl-enabled').checked = !!r.enabled;
+  const box = $('#sl-engine');
+  const inst = r.install || {};
+  const busy = inst.state === 'downloading' || inst.state === 'unpacking';
+  let html = '';
+  if (r.installed) {
+    html = `<div class="row between wrap gap"><span><span class="pill ok">Engine installed</span> <span class="muted small">OrcaSlicer engine ${esc(r.engine)}</span></span>
+      <span class="row gap"><a class="btn small" href="#slicer/prepare">Open the slicer</a><button class="btn small ghost-danger" type="button" id="sl-remove">Remove engine</button></span></div>`;
+  } else if (!r.supported) {
+    html = '<div class="notice warn">The slicer engine runs on the board (64-bit ARM) only.</div>';
+  } else if (busy) {
+    html = `<div class="notice">${esc(inst.message || 'Downloading…')}</div><div class="progress"><div style="width:${inst.percent || 0}%"></div></div>`;
+  } else {
+    html = `<p class="small">The engine is downloaded once from GitHub (about 70 MB; 230 MB on the SD card).</p>
+      ${inst.state === 'error' ? `<div class="notice err">${esc(inst.message)}</div>` : ''}
+      <button class="btn primary" type="button" id="sl-install">Download the slicer engine</button>`;
+  }
+  html += `<p class="hint">Engine: <a href="${esc(r.source)}" target="_blank" rel="noopener">OrcaSlicer engine by Helio Additive (slicer-cli), AGPL-3.0 — source code</a>.</p>`;
+  box.innerHTML = html;
+  clearTimeout(slicerPoll);
+  if (busy && state.view === 'settings' && state.tab === 'general') slicerPoll = setTimeout(loadSlicerSettings, 1000);
+  else if (inst.state === 'done') refreshStatus();
+}
+$('#sl-enabled').addEventListener('change', async (e) => {
+  const r = await api('slicer/settings', { method: 'POST', body: { enabled: e.target.checked } });
+  toast(r.enabled ? 'The slicer is shown in the top bar.' : 'The slicer is hidden.');
+  await refreshStatus();
+  loadSlicerSettings();
+});
+$('#sl-engine').addEventListener('click', async (e) => {
+  if (e.target.id === 'sl-install') {
+    e.target.disabled = true;
+    const r = await api('slicer/install', { method: 'POST' });
+    if (!r.ok) toast(r.message, true);
+    loadSlicerSettings();
+  }
+  if (e.target.id === 'sl-remove') {
+    if (!(await confirmBox('Remove the slicer engine?', 'It frees about 230 MB. You can download it again any time.', 'Remove'))) return;
+    const r = await api('slicer/remove', { method: 'POST' });
+    toast(r.message, !r.ok);
+    refreshStatus();
+    loadSlicerSettings();
+  }
+});
+
 async function loadSettings() {
   const s = await api('settings');
   $('#s-discord').value = s.discordWebhook || '';
@@ -1272,3 +1348,12 @@ $('#btn-pn-off').addEventListener('click', async () => {
   route();
   setInterval(() => { if (!document.hidden) refreshStatus(); }, 2000);
 })();
+
+// ---------------------------------------------------------------- shared with the slicer module
+async function printFile(file) {
+  await loadFiles();
+  const f = (state.files || []).find((x) => x.file === file);
+  if (!f) { toast('The sliced file was not found on the board.', true); return; }
+  openPrint(f);
+}
+window.FFB = { api, toast, notice, confirmBox, esc, swatch, current, printers, printFile, colorDiff, family, fmtTime, state, refreshStatus };
