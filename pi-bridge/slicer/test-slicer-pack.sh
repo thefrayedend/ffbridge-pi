@@ -13,8 +13,8 @@ docker run --rm -v "$PACK_DIR:/pack:ro" -v "$W:/w:ro" debian:bullseye-slim bash 
   echo "C library in the container: $(ldd --version | head -1)"
   D=/var/lib/ffbridge/slicer/engine
   mkdir -p $D && tar -xzf /pack/ffbridge-slicer-arm64.tar.gz -C $D
-  export LD_LIBRARY_PATH=$D/rt:$D/lib
-  E=$D/bin/slicer_cli-orcaslicer
+  # the engine'"'"'s own C library only for the engine (system programs like grep must not see it)
+  E="env LD_LIBRARY_PATH=$D/rt:$D/lib $D/bin/slicer_cli-orcaslicer"
   time $E --list-presets --printer "Flashforge Creator 5 Pro 0.4 nozzle" > /tmp/presets.json
   grep -q "0.20mm Standard @FF C5" /tmp/presets.json || { echo "Creator 5 Pro presets missing"; exit 1; }
   if grep -q "Bambu Lab" /tmp/presets.json; then echo "non-Flashforge printer profiles left in the pack"; exit 1; fi
