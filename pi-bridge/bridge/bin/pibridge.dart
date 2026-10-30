@@ -16,6 +16,7 @@ import '../src/boot_config.dart';
 import '../src/core.dart';
 import '../src/pi_config.dart';
 import '../src/setup_server.dart';
+import '../src/slicer.dart';
 import '../src/system_control.dart';
 import '../src/updater.dart';
 
@@ -44,7 +45,7 @@ String _prepareMainsail(String dir, String zip) {
 Future<void> main(List<String> args) async {
   if (args.contains('--help') || args.contains('-h')) {
     stdout.writeln('pibridge [--data DIR] [--mainsail DIR] [--mainsail-zip FILE] [--setup-web DIR] [--setup-port N] '
-        '[--ai-url URL] [--boot-partition DIR] [--no-ai]');
+        '[--ai-url URL] [--boot-partition DIR] [--no-ai] [--slicer-engine DIR]');
     return;
   }
   final scriptDir = File(Platform.script.toFilePath()).parent.path;
@@ -65,7 +66,10 @@ Future<void> main(List<String> args) async {
   final ai = AiMonitor(host, pi, aiUrl, host.log);
   final updater = Updater(host.log, sys);
   if (restored != null) host.log.info(restored);
-  final setup = SetupServer(host: host, pi: pi, ai: ai, sys: sys, webDir: setupWeb, port: setupPort, backup: backup, updater: updater);
+  final engine = _arg(args, '--slicer-engine', '');
+  final slicer = Slicer(host, pi, data, engineOverride: engine.isEmpty ? null : engine, repo: updateRepo);
+  final setup = SetupServer(
+      host: host, pi: pi, ai: ai, sys: sys, webDir: setupWeb, port: setupPort, backup: backup, updater: updater, slicer: slicer);
 
   await host.startAll();
   await setup.start();
