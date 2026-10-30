@@ -1,7 +1,7 @@
-<!-- Help pages for the FlashForge Bridge screen. Each <section> is one topic (loaded by app.js). -->
+<!-- Help pages for the Flash Bridge screen. Each <section> is one topic (loaded by app.js). -->
 
 <section data-topic="start" data-title="Quick start" data-group="Getting started">
-  <p>FlashForge Bridge turns a small board (Orange Pi Zero 4) into a control screen for your FlashForge printer: live camera, print control, multi-colour filament matching, AI failure detection, and a connection for OrcaSlicer and Mainsail. You open it in any web browser on your phone, tablet or computer.</p>
+  <p>Flash Bridge turns a small board (Orange Pi Zero 4) into a control screen for your FlashForge printer: live camera, print control, multi-colour filament matching, AI failure detection, and a connection for OrcaSlicer and Mainsail. You open it in any web browser on your phone, tablet or computer.</p>
   <h3>You need</h3>
   <ul>
     <li>The board with its SD card and a USB-C power supply (5 V / 3 A or better)</li>
@@ -9,7 +9,7 @@
   </ul>
   <h3>Steps</h3>
   <ol>
-    <li><b>Flash the SD card</b> with the FlashForge Bridge image (balenaEtcher or Raspberry Pi Imager → “Use custom”).</li>
+    <li><b>Flash the SD card</b> with the Flash Bridge image (balenaEtcher or Raspberry Pi Imager → “Use custom”).</li>
     <li><b>Put in your Wi-Fi details.</b> After flashing, unplug and re-insert the card. Your computer shows a small drive called <b>FFBRIDGE</b>. Open <code>ffbridge-config.txt</code> on it and fill in two lines:
 <pre>wifi_name=YourWiFiName
 wifi_password=YourWiFiPassword</pre>
@@ -258,6 +258,33 @@ ssh_password=            at least 6 characters</pre>
 <section data-topic="errors" data-title="Printer error messages" data-group="Using it">
   <p>When the printer reports an error, a red box appears on the printer screen with the error code, what it means in plain English and what to try. <b>Repair guide ↗</b> opens FlashForge's page for your printer model.</p>
   <p>The same message goes to Discord if you use it.</p>
+</section>
+
+<section data-topic="slicer" data-title="Slicer" data-group="Using it">
+  <p>Flash Bridge can slice for you, right in the browser: put models on the plate, paint colours, check every layer, then print — no OrcaSlicer on your PC needed. It uses the real OrcaSlicer engine running on the board.</p>
+  <h3>Switching it on</h3>
+  <p>Settings → General → <b>Slicer</b> → <b>Download the slicer engine</b> (once, about 70 MB; it needs the board to have internet). The switch on that card shows or hides <b>Prepare · Paint · Preview</b> in the top bar.</p>
+  <h3>Your printer's profiles only</h3>
+  <p>The slicer always uses the Flashforge profiles of the printer you have open (for example <i>Flashforge Creator 5 Pro 0.4 nozzle</i>). Opening a project made for another printer — say a MakerWorld file for a Bambu P2S — keeps its models, colours and painting but <b>never</b> switches the printer or its settings. The board checks this too, so nothing else can slip in. Only the nozzle size, plate type, quality profile and Flashforge filament profiles of your printer can be chosen.</p>
+  <h3>Prepare</h3>
+  <ul>
+    <li><b>Add</b> STL, OBJ or 3MF files with the + button or by dropping them on the 3D view. Projects with several plates ask which plate to open. Modifier / helper parts in a project are left out.</li>
+    <li>Click a model to select it, then <b>Move (M)</b>, <b>Rotate (R)</b> or <b>Scale (S)</b> with the handles, or type exact numbers in the Objects card. Models always sit on the plate.</li>
+    <li><b>Lay on face (F)</b>: click the side that should be on the plate. <b>Auto-orient</b> puts the biggest flat side down. <b>Arrange</b> spreads everything out on the plate.</li>
+    <li><b>Filaments</b>: one row per head / slot. <b>Use loaded</b> copies what is loaded in the printer. Each object has its own filament (the number next to its name).</li>
+    <li><b>Quality</b>: the profile plus the most-used settings. <b>All settings</b> has everything else (search for "ironing", "seam", "speed" …). Changed settings are blue; ↺ puts one back.</li>
+  </ul>
+  <h3>Paint</h3>
+  <p>Pick a filament (or press 1–9), set the brush size ([ and ] keys) and drag over a model. The striped button is the eraser (back to the object's own filament). Ctrl+Z undoes. Painting from MakerWorld / Bambu / Orca projects is kept.</p>
+  <h3>Slice &amp; Preview</h3>
+  <p><b>Preview</b> slices the plate on the board (a few seconds to a few minutes on the Orange Pi) and shows it layer by layer: drag the slider on the right or use the arrow keys. <b>Line type</b> colours walls, infill, supports … and lets you hide types by clicking them. The side panel shows print time and filament used per head.</p>
+  <p><b>Print…</b> opens the normal print window with the filament check, exactly like a file from OrcaSlicer. <b>G-code</b> / <b>3MF</b> save the sliced file.</p>
+  <h3>Good to know</h3>
+  <ul>
+    <li>The models live in this browser tab until you slice; reloading the page empties the plate (the last slice stays).</li>
+    <li>Very big models (millions of triangles) are slow on phones; a PC works best for painting.</li>
+    <li>The engine is the OrcaSlicer engine packaged by Helio Additive (slicer-cli), AGPL-3.0. The <b>source</b> link is under the slice button.</li>
+  </ul>
 </section>
 
 <section data-topic="layout" data-title="Screen layout" data-group="Using it">
