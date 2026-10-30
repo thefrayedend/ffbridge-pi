@@ -688,7 +688,6 @@ async function add3mf(buf, base) {
   let first = platesObjects(S.plate).length ? Math.max(...S.objects.map((o) => o.plate)) + 1 : S.plate;
   if (!S.objects.length) first = 0;
   const b = bed();
-  const cols = Math.ceil(Math.sqrt(Math.max(1, groups.length)));
   const boxOf = (list) => {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const o of list) for (let i = 0; i < o.positions.length; i += 3) {
@@ -697,28 +696,39 @@ async function add3mf(buf, base) {
     }
     return { x0, y0, x1, y1 };
   };
-  // which source bed width explains the layout best (the project was made for another printer)
-  const widths = [b.w, 256, 350, 180, 220, 235, 250, 300, 320];
-  const fitsWith = (w) => used.every((list) => {
-    const gi = groups.indexOf(list), bx = boxOf(list);
-    const ox = (gi % cols) * w * 1.2, oy = -Math.floor(gi / cols) * w * 1.2;
-    return bx.x0 - ox >= -1 && bx.x1 - ox <= b.w + 1 && bx.y0 - oy >= -1 && bx.y1 - oy <= b.d + 1;
-  });
-  const srcW = widths.find(fitsWith);
+  // Bambu / Orca save every plate at its place in a grid: plate (col, row) starts at
+  // x = col * 1.2 * width, y = -row * 1.2 * depth of the printer it was made for.
+  // Find the source bed size for which every plate's models sit inside one grid cell,
+  // then move each plate so the source plate's centre lands on our plate's centre.
+  const beds = [[256, 256], [180, 180], [350, 320], [b.w, b.d], [220, 220], [235, 235], [250, 210], [300, 300], [320, 320], [400, 400]];
+  const boxes = used.map(boxOf);
+  const cellOf = (bx, w, d) => {
+    const sx = w * 1.2, sy = d * 1.2;
+    const col = Math.round(((bx.x0 + bx.x1) / 2 - w / 2) / sx), row = Math.round(-((bx.y0 + bx.y1) / 2 - d / 2) / sy);
+    const ox = col * sx, oy = -row * sy;
+    const inside = col >= 0 && row >= 0 && bx.x0 >= ox - 2 && bx.x1 <= ox + w + 2 && bx.y0 >= oy - 2 && bx.y1 <= oy + d + 2;
+    return inside ? { cx: ox + w / 2, cy: oy + d / 2 } : null;
+  };
+  // the bed size that explains the most plates (first in the list wins a tie)
+  let src = null, best = 0;
+  for (const [w, d] of beds) {
+    const n = boxes.filter((bx) => cellOf(bx, w, d)).length;
+    if (n > best) { best = n; src = [w, d]; }
+  }
   const added = [];
   let k = 0;
   for (const list of used) {
-    const gi = groups.indexOf(list);
-    const target = first + k++;
+    const target = first + k;
+    const bx = boxes[k++];
     if (target >= S.nPlates) S.nPlates = target + 1;
-    const bx = boxOf(list);
-    let dx, dy;
-    if (srcW) { dx = -(gi % cols) * srcW * 1.2; dy = Math.floor(gi / cols) * srcW * 1.2; } else {
-      dx = b.x0 + b.w / 2 - (bx.x0 + bx.x1) / 2; dy = b.y0 + b.d / 2 - (bx.y0 + bx.y1) / 2; // centre it
-    }
-    // still too big for this bed after the shift: centre it on the plate
+    const cell = src && cellOf(bx, src[0], src[1]);
+    const mx = b.x0 + b.w / 2, my = b.y0 + b.d / 2;
+    // keep the layout of the source plate (centred), or centre the models when unknown
+    let dx = cell ? mx - cell.cx : mx - (bx.x0 + bx.x1) / 2;
+    let dy = cell ? my - cell.cy : my - (bx.y0 + bx.y1) / 2;
+    // the source plate was bigger and the models would hang over the edge: centre them
     if (bx.x1 + dx > b.x0 + b.w + 1 || bx.x0 + dx < b.x0 - 1 || bx.y1 + dy > b.y0 + b.d + 1 || bx.y0 + dy < b.y0 - 1) {
-      dx = b.x0 + b.w / 2 - (bx.x0 + bx.x1) / 2; dy = b.y0 + b.d / 2 - (bx.y0 + bx.y1) / 2;
+      dx = mx - (bx.x0 + bx.x1) / 2; dy = my - (bx.y0 + bx.y1) / 2;
     }
     dx += plateX(target);
     for (const o of list) {
@@ -730,7 +740,14 @@ async function add3mf(buf, base) {
       added.push(obj);
     }
   }
-  const maxFil = Math.max(...added.map((o) => Math.max(o.filament, ...o.states)));
+  // Loop, not Math.max(...states): painted models have millions of states, and
+  // spreading that many arguments throws ("too many function arguments").
+  let maxFil = 0;
+  for (const o of added) {
+    if (o.filament > maxFil) maxFil = o.filament;
+    const st = o.states || [];
+    for (let i = 0; i < st.length; i++) if (st[i] > maxFil) maxFil = st[i];
+  }
   if (maxFil > S.filaments.length) F.toast(`This project uses ${maxFil} filaments; your printer has ${S.filaments.length}. Parts on filament ${S.filaments.length + 1}+ show grey — pick other filaments for them.`, true);
   if (r.skipped) F.toast(`${r.skipped} modifier / helper part${r.skipped === 1 ? ' was' : 's were'} left out (only printable parts are opened).`);
   F.toast(`Opened ${base}: ${added.length} object${added.length === 1 ? '' : 's'} on ${used.length} plate${used.length === 1 ? '' : 's'}. Your printer's own profiles are used, not the ones saved in the project.`);
