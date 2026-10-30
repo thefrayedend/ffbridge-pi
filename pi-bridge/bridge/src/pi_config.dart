@@ -56,6 +56,9 @@ class PiConfig {
   /// Optional password for the setup page (empty = open on the local network).
   String setupPassword = '';
 
+  /// Show the slicer (Prepare / Paint / Preview) in the web page.
+  bool slicerEnabled = true;
+
   PiConfig(String dataDir) : _file = File('$dataDir/pi.json') {
     load();
   }
@@ -65,13 +68,14 @@ class PiConfig {
       final j = jsonDecode(_file.readAsStringSync()) as Map<String, dynamic>;
       ai = AiSettings.fromJson(Map<String, dynamic>.from(j['ai'] as Map? ?? {}));
       setupPassword = j['setupPassword'] ?? '';
+      slicerEnabled = j['slicerEnabled'] ?? true;
     } catch (_) {}
   }
 
   void save() {
     _file.parent.createSync(recursive: true);
     final tmp = File('${_file.path}.tmp');
-    tmp.writeAsStringSync(const JsonEncoder.withIndent('  ').convert({'ai': ai.toJson(), 'setupPassword': setupPassword}));
+    tmp.writeAsStringSync(const JsonEncoder.withIndent('  ').convert({'ai': ai.toJson(), 'setupPassword': setupPassword, 'slicerEnabled': slicerEnabled}));
     tmp.renameSync(_file.path);
   }
 }

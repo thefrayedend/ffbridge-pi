@@ -10,6 +10,7 @@ import 'backup.dart';
 import 'core.dart';
 import 'pi_config.dart';
 import 'printer_api.dart';
+import 'slicer.dart';
 import 'system_control.dart';
 import 'updater.dart';
 
@@ -28,11 +29,12 @@ class SetupServer {
   final int port;
   final Backup? backup;
   final Updater? updater;
+  final Slicer? slicer;
   HttpServer? _server;
   List<DiscoveredPrinter> _lastScan = [];
   late final PrinterApi printers = PrinterApi(host);
 
-  SetupServer({required this.host, required this.pi, required this.ai, required this.sys, required this.webDir, this.port = 80, this.backup, this.updater});
+  SetupServer({required this.host, required this.pi, required this.ai, required this.sys, required this.webDir, this.port = 80, this.backup, this.updater, this.slicer});
 
   Future<void> start() async {
     _ips = await SystemControl.localIps();
@@ -118,7 +120,8 @@ class SetupServer {
     final ext = f.path.split('.').last.toLowerCase();
     req.response.headers
       ..set('Content-Type', _types[ext] ?? 'application/octet-stream')
-      ..set('Cache-Control', 'no-cache');
+      // the slicer's 3D libraries (1.6 MB) only change with their pinned version
+      ..set('Cache-Control', rel.startsWith('/slicer/vendor/') ? 'public, max-age=604800' : 'no-cache');
     await req.response.addStream(f.openRead());
     await req.response.close();
   }
@@ -132,6 +135,8 @@ class SetupServer {
     try {
       // GET /api/status
       if (p == 'status' && m == 'GET') return await _json(req, await _status(req));
+
+      if (slicer != null && await slicer!.handle(req, seg, _json)) return;
 
       // printers
       if (seg.isNotEmpty && seg[0] == 'printers') {
@@ -408,6 +413,7 @@ class SetupServer {
         'aiService': ai.service.toJson(),
         'aiEnabled': pi.ai.enabled,
         'update': {'available': updater?.available ?? false, 'latest': updater?.latest?['version']},
+        'slicer': {'enabled': pi.slicerEnabled && slicer != null, 'installed': slicer?.installed ?? false},
       };
 
   Future<Map<String, dynamic>> _testPrinter(Map<String, dynamic> b) async {
