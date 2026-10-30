@@ -1050,7 +1050,7 @@ async function loadSlicerSettings() {
   } else if (busy) {
     html = `<div class="notice">${esc(inst.message || 'Downloading…')}</div><div class="progress"><div style="width:${inst.percent || 0}%"></div></div>`;
   } else {
-    html = `<p class="small">The engine is downloaded once from GitHub (about 70 MB; 230 MB on the SD card).</p>
+    html = `<p class="small">The engine is downloaded once from GitHub (about 35 MB; 90 MB on the SD card).</p>
       ${inst.state === 'error' ? `<div class="notice err">${esc(inst.message)}</div>` : ''}
       <button class="btn primary" type="button" id="sl-install">Download the slicer engine</button>`;
   }
@@ -1074,7 +1074,7 @@ $('#sl-engine').addEventListener('click', async (e) => {
     loadSlicerSettings();
   }
   if (e.target.id === 'sl-remove') {
-    if (!(await confirmBox('Remove the slicer engine?', 'It frees about 230 MB. You can download it again any time.', 'Remove'))) return;
+    if (!(await confirmBox('Remove the slicer engine?', 'It frees about 90 MB. You can download it again any time.', 'Remove'))) return;
     const r = await api('slicer/remove', { method: 'POST' });
     toast(r.message, !r.ok);
     refreshStatus();
