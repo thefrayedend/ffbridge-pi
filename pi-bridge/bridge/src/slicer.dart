@@ -350,7 +350,7 @@ class Slicer {
 
   Future<Map<String, dynamic>> remove() async {
     if (engineOverride != null) return {'ok': false, 'message': 'This engine was given on the command line.'};
-    if (job?.running == true) return {'ok': false, 'message': 'Wait for the slice to finish.'};
+    if (running != null) return {'ok': false, 'message': 'Wait for the slice to finish.'};
     final d = Directory('$dir/engine');
     if (d.existsSync()) d.deleteSync(recursive: true);
     _clearCaches();
@@ -365,18 +365,22 @@ class Slicer {
         'supported': await supported(),
         'install': installState,
         'source': slicerSourceUrl,
-        'job': job?.toJson(),
+        'jobs': {for (final e in jobs.entries) '${e.key}': e.value.toJson()},
       };
 
   // ------------------------------------------------------------------ slicing
-  SliceJob? job;
+  /// The last slice of every plate (plate number -> job). One slice runs at a time.
+  final Map<int, SliceJob> jobs = {};
+  SliceJob? get running => jobs.values.where((j) => j.running).firstOrNull;
+  static int plateOf(Object? v) => (int.tryParse('${v ?? 1}') ?? 1).clamp(1, 99);
 
   Future<Map<String, dynamic>> startSlice(HttpRequest req) async {
     if (!installed) return {'ok': false, 'message': 'The slicer engine is not installed (Settings → General → Slicer).'};
-    if (job?.running == true) return {'ok': false, 'message': 'A slice is already running.'};
+    if (running != null) return {'ok': false, 'message': 'A slice is already running.'};
     final boundary = req.headers.contentType?.parameters['boundary'];
     if (boundary == null) return {'ok': false, 'message': 'Expected the plate as a file upload.'};
-    final jd = Directory('$dir/job');
+    final plate = plateOf(req.uri.queryParameters['plate']);
+    final jd = Directory('$dir/job-$plate');
     if (jd.existsSync()) jd.deleteSync(recursive: true);
     jd.createSync(recursive: true);
     final model = File('${jd.path}/plate.3mf');
@@ -400,7 +404,7 @@ class Slicer {
     // list the colour matching and the printer's material mapping need. Others get plain G-code.
     final c = host.instances['${o['printer']}']?.bridge.client;
     final as3mf = c == null || c.isCreator5 || c.isAD5X;
-    final j = job = SliceJob(name: as3mf ? '$name.gcode.3mf' : '$name.gcode', printerId: '${o['printer']}', dir: jd.path);
+    final j = jobs[plate] = SliceJob(name: as3mf ? '$name.gcode.3mf' : '$name.gcode', printerId: '${o['printer']}', dir: jd.path, plate: plate);
     host.log.info('Slicing $name for ${o['printer']} (${args.length} options)');
     unawaited(_run(j, args, thumb));
     return {'ok': true, 'job': j.toJson()};
@@ -500,7 +504,7 @@ class Slicer {
   }
 
   void cancel() {
-    final j = job;
+    final j = running;
     if (j == null || !j.running) return;
     j.state = 'cancelled';
     j.message = 'Cancelled.';
@@ -508,8 +512,8 @@ class Slicer {
   }
 
   /// Puts the finished G-code into the printer's file list (then the normal print dialog takes over).
-  Future<Map<String, dynamic>> send(String printerId) async {
-    final j = job;
+  Future<Map<String, dynamic>> send(String printerId, int plate) async {
+    final j = jobs[plate];
     if (j == null || j.state != 'done' || j.gcode == null) return {'ok': false, 'message': 'Slice the plate first.'};
     final b = host.instances[printerId]?.bridge;
     if (b == null) return {'ok': false, 'message': 'That printer is not running.'};
@@ -562,24 +566,26 @@ class Slicer {
         case 'POST slice':
           await json(req, await startSlice(req));
         case 'GET job':
-          await json(req, {'ok': true, 'job': job?.toJson()});
+          await json(req, {'ok': true, 'job': jobs[plateOf(q['plate'])]?.toJson(), 'running': running?.plate});
         case 'POST job/cancel':
           cancel();
-          await json(req, {'ok': true, 'job': job?.toJson()});
+          await json(req, {'ok': true});
         case 'POST send':
-          await json(req, await send('${(await body())['printer'] ?? ''}'));
+          final b = await body();
+          await json(req, await send('${b['printer'] ?? ''}', plateOf(b['plate'])));
         case 'GET gcode':
+          final job = jobs[plateOf(q['plate'])];
           final g = job?.gcode;
-          if (g == null || !File(g).existsSync()) return await json(req, {'ok': false, 'message': 'Nothing sliced yet.'}, status: 404).then((_) => true);
+          if (job == null || g == null || !File(g).existsSync()) return await json(req, {'ok': false, 'message': 'Nothing sliced yet.'}, status: 404).then((_) => true);
           req.response.headers
             ..contentType = ContentType('text', 'plain', charset: 'utf-8')
             ..set('Cache-Control', 'no-store');
           var file = g;
-          if (q['download'] == '3mf' && job!.project != null) {
-            file = job!.project!;
-            req.response.headers.set('Content-Disposition', 'attachment; filename="${job!.name.replaceAll('"', '')}"');
+          if (q['download'] == '3mf' && job.project != null) {
+            file = job.project!;
+            req.response.headers.set('Content-Disposition', 'attachment; filename="${job.name.replaceAll('"', '')}"');
           } else if (q.containsKey('download')) {
-            req.response.headers.set('Content-Disposition', 'attachment; filename="${job!.name.replaceAll(RegExp(r'\.gcode\.3mf$'), '.gcode').replaceAll('"', '')}"');
+            req.response.headers.set('Content-Disposition', 'attachment; filename="${job.name.replaceAll(RegExp(r'\.gcode\.3mf$'), '.gcode').replaceAll('"', '')}"');
           }
           await req.response.addStream(File(file).openRead());
           await req.response.close();
@@ -613,7 +619,8 @@ class SliceJob {
   final List<String> warnings = [];
   Process? process;
 
-  SliceJob({required this.name, required this.printerId, required this.dir});
+  final int plate;
+  SliceJob({required this.name, required this.printerId, required this.dir, this.plate = 1});
   bool get running => state == 'slicing';
 
   void onLine(String line) {
@@ -659,6 +666,7 @@ class SliceJob {
 
   Map<String, dynamic> toJson() => {
         'name': name,
+        'plate': plate,
         'printer': printerId,
         'state': state,
         'percent': percent,
