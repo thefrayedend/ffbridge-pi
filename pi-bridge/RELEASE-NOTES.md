@@ -1,4 +1,4 @@
-## FlashForge Bridge for Orange Pi Zero 4
+## Flash Bridge for Orange Pi Zero 4
 
 **Flash it:** download `ffbridge-orangepi-zero4.img.xz` and write it to a microSD card (8 GB or larger) with
 [Raspberry Pi Imager](https://www.raspberrypi.com/software/) ("Use custom") or [balenaEtcher](https://etcher.balena.io/).
@@ -19,7 +19,10 @@ setup page, Spoolman, Discord, and AI print-failure detection (Obico model, runs
 
 ## What's new
 
-- Screen layout settings (Settings → General → Screen layout): camera size, side panel right/left/below, where the print status card sits, and an option to keep the whole camera picture on screen. Saved per browser. The side panel now stays beside the camera on normal-width screens.
-- Printer network (Settings → Advanced → Printer network, off by default): the board's Wi-Fi becomes a private network for your printers while the board joins your home network by cable. Printers are cut off from the internet; you can allow internet for 1 or 4 hours (e.g. for a firmware update) and it switches itself off again. The board also gives the printers the time.
-- Printers that get a new network address are found again by themselves (no more re-entering the IP address).
-- Fixed: the bridge could crash when a printer was edited or removed while it was still trying to connect.
+- **Slicer, built in** (Settings → General → Slicer → Download the slicer engine, once). New **Prepare · Paint · Preview** buttons in the top bar:
+  - Prepare: add STL / OBJ / 3MF (MakerWorld, Bambu, Orca projects too), move / rotate / scale, lay on face, auto-orient, arrange, filament per object, quality profile + all print settings.
+  - Paint: brush colours onto models (painting from MakerWorld / Orca projects is kept).
+  - Preview: slices on the board with the real OrcaSlicer engine and shows the print layer by layer (by filament or line type), print time and filament used. Print… goes straight into the filament check.
+  - Only the Flashforge profiles of the printer you have open can be used. A project made for another printer keeps its models and colours but never switches the printer or its settings.
+  - Switch the slicer off in the same Settings card to hide it.
+- The bridge is now called **Flash Bridge** (the address http://ffbridge.local stays the same).
