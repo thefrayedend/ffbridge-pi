@@ -91,7 +91,7 @@ function showSetup(st) {
   const box = $('#sl-setup');
   box.classList.remove('hidden');
   box.innerHTML = `<div class="card"><h2>Set up the slicer</h2>
-    <p class="muted">The slicer engine (OrcaSlicer, about 70 MB) is downloaded once to the board. After that you can slice here: place models, paint colours, check every layer and print, with your printer's own Flashforge profiles.</p>
+    <p class="muted">The slicer engine (OrcaSlicer, about 35 MB) is downloaded once to the board. After that you can slice here: place models, paint colours, check every layer and print, with your printer's own Flashforge profiles.</p>
     ${st.supported ? '<a class="btn primary" href="#settings/general">Go to Settings → Slicer</a>' : '<div class="notice warn">The slicer engine runs on the board only.</div>'}</div>`;
 }
 
