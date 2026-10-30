@@ -10,7 +10,7 @@
 // not send them, and the engine's command-line presets win over anything in a 3MF anyway).
 //
 // The engine is not part of the SD card image: Settings -> General -> Slicer downloads it
-// (~70 MB) from this project's GitHub release into <data>/slicer/engine.
+// (~35 MB) from this project's GitHub release into <data>/slicer/engine.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
