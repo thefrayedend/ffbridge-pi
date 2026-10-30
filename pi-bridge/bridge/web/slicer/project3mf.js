@@ -222,7 +222,7 @@ export function import3mf(buffer) {
     const topId = item.getAttribute('objectid');
     const info = objInfo.get(topId) || {};
     const objFil = info.extruder || 1;
-    const pos = [], codes = [];
+    const pos = [], codes = [], sup = [], seam = [];
     let partCount = 0;
     const visit = (doc, id, m, depth, partKey) => {
       if (depth > 16) throw new Error('This 3MF nests its parts too deeply.');
@@ -251,6 +251,8 @@ export function import3mf(buffer) {
           // a part on another filament than its object: paint the whole part with it
           if (!code && partFil && partFil !== objFil) code = encodeTree([partFil], 0, 0);
           codes.push(code);
+          sup.push(flip ? '' : (t.getAttribute('paint_supports') || t.getAttribute('slic3rpe:custom_supports') || ''));
+          seam.push(flip ? '' : (t.getAttribute('paint_seam') || t.getAttribute('slic3rpe:custom_seam') || ''));
         }
         if (pos.length / 9 > 2000000) throw new Error('This model has more than 2 million triangles.');
       } else {
@@ -265,7 +267,7 @@ export function import3mf(buffer) {
     visit(root, topId, parseTransform(item.getAttribute('transform')) || IDENT, 0, null);
     if (!pos.length) continue;
     const name = info.name || objectsOf.get(docName(root)).get(topId)?.getAttribute('name') || `Object ${objects.length + 1}`;
-    objects.push({ id: topId, name, positions: new Float32Array(pos), paint: codes, filament: objFil, parts: partCount });
+    objects.push({ id: topId, name, positions: new Float32Array(pos), paint: codes, sup: sup.some(Boolean) ? sup : null, seam: seam.some(Boolean) ? seam : null, filament: objFil, parts: partCount });
   }
   if (!objects.length) throw new Error(skipped ? 'This 3MF only has modifier or helper parts, nothing to print.' : 'There is nothing printable in this 3MF.');
   return { objects, plates: plates.filter((p) => p.objectIds.length), skipped };
@@ -277,7 +279,7 @@ const fmt = (v) => { const s = (Math.round(v * 1e5) / 1e5).toString(); return s 
 
 /**
  * Writes the plate. objects: [{name, positions (world, mm, Float32Array 9/triangle),
- * paintCodes (array of strings per triangle or null), filament}]. No printer / process settings
+ * paint: {color, supports, seam} (arrays of codes per triangle, each may be null), filament}]. No printer / process settings
  * are written: the board slices with the open printer's own profiles.
  */
 export function export3mf(objects, title = 'Plate') {
@@ -303,8 +305,12 @@ export function export3mf(objects, title = 'Plate') {
     for (let f = 0; f < tri.length / 3; f++) {
       const a = tri[f * 3], b = tri[f * 3 + 1], c = tri[f * 3 + 2];
       if (a === b || b === c || a === c) continue; // collapsed by rounding
-      const code = o.paintCodes ? o.paintCodes[f] : '';
-      t.push(`<triangle v1="${a}" v2="${b}" v3="${c}"${code ? ` paint_color="${code}"` : ''}/>`);
+      const P = o.paint || {};
+      let extra = '';
+      if (P.color && P.color[f]) extra += ` paint_color="${P.color[f]}"`;
+      if (P.supports && P.supports[f]) extra += ` paint_supports="${P.supports[f]}"`;
+      if (P.seam && P.seam[f]) extra += ` paint_seam="${P.seam[f]}"`;
+      t.push(`<triangle v1="${a}" v2="${b}" v3="${c}"${extra}/>`);
     }
     model.push(t.join(''), '</triangles></mesh></object>');
     build.push(`<item objectid="${id}" printable="1"/>`);
