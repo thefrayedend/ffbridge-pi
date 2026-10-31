@@ -848,7 +848,8 @@ async function loadAi() {
 function renderAiService() {
   const sv = (state.status && state.status.aiService) || (state.ai && state.ai.service) || {};
   const el = $('#ai-service');
-  if (sv.ready) notice(el, `AI model loaded (${sv.backend || 'CPU'}). One check takes about ${sv.avgMs ? Math.round(sv.avgMs) + ' ms' : 'a second'}.`, 'ok');
+  if (sv.pausedForSlicer) notice(el, 'The AI is paused while the slicer is working, so the slicer gets the memory and processor. It starts again by itself shortly after slicing ends.', 'warn');
+  else if (sv.ready) notice(el, `AI model loaded (${sv.backend || 'CPU'}). One check takes about ${sv.avgMs ? Math.round(sv.avgMs) + ' ms' : 'a second'}.`, 'ok');
   else if (sv.reachable) notice(el, 'The AI model is loading. This can take a minute after the board starts.', 'warn');
   else notice(el, 'The AI service is not running yet. If this does not change after a few minutes, restart the board.', 'warn');
 }
@@ -864,6 +865,7 @@ const aiStatusText = {
   off: 'Switched off for this printer.', idle: 'Waiting for a print to start.', watching: 'Watching the print.',
   warning: 'Possible failure! Please check the printer.', paused: 'The AI paused this print. Check it, then resume or stop it on the printer screen.',
   ignored: 'Alerts muted for the rest of this print.', 'no-camera': 'No camera found for this printer.', 'ai-offline': 'The AI service is starting…',
+  'paused-slicer': 'Paused while the slicer is working — starts again by itself.',
 };
 function renderAiPrinters(force = false) {
   const s = state.status;

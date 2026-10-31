@@ -466,6 +466,8 @@ dialog.small-dialog { width: min(400px, calc(100% - 24px)); }
 .sl-printer .lock { color: var(--muted); font-size: 12px; display: flex; gap: 4px; align-items: center; }
 .sl-fils { display: grid; gap: 6px; }
 .sl-fil { display: grid; grid-template-columns: 26px 34px minmax(0, 1fr); align-items: center; gap: 8px; }
+.sl-fil:has(> button) { grid-template-columns: 26px 34px minmax(0, 1fr) 26px; }
+.sl-fil > button { padding: 2px 0; min-width: 26px; }
 .sl-fil .n { font-weight: 700; color: var(--muted); text-align: center; font-size: 13px; }
 .sl-fil input[type=color] { width: 34px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; cursor: pointer; }
 .sl-fil input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
@@ -525,6 +527,7 @@ dialog.sheet.wide { width: min(760px, calc(100% - 24px)); }
 .sl-plates button span { background: rgba(255, 255, 255, .12); border-radius: 999px; padding: 0 6px; font-size: 11px; }
 .sl-plates button:hover { background: rgba(255, 255, 255, .1); }
 .sl-plates button.active { background: var(--primary); color: #fff; }
+.sl-plates button.add { border: 1px dashed rgba(255, 255, 255, .35); }
 .sl-plates .pd { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 .pd.ok { background: #5bc77a; } .pd.busy { background: #f2b13b; }
 @media (max-width: 860px) { .sl-plates { left: 64px; transform: none; max-width: calc(100% - 140px); } }

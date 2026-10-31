@@ -35,6 +35,56 @@ RETRY_EVERY = 300        # retry the saved Wi-Fi every 5 min while the setup hot
 MAX_DEFER = 1800         # ... but not while a phone is connected to the hotspot (at most 30 min)
 
 
+
+# ----------------------------------------------------------------------------- slicer helpers
+AI_PAUSE_MARK = "/run/ffbridge-ai-paused"
+
+
+def ai_pause():
+    """Stops the AI service while the slicer runs (frees its memory and CPU). Only marks it for
+    resuming when it was running, so a service the user switched off stays off."""
+    if run(["systemctl", "is-active", "--quiet", "ffai"]).returncode != 0:
+        return {"ok": True, "message": "AI service was not running."}
+    open(AI_PAUSE_MARK, "w").close()
+    r = run(["systemctl", "stop", "ffai"], timeout=30)
+    return {"ok": r.returncode == 0, "message": "AI service paused." if r.returncode == 0 else r.stderr.strip()}
+
+
+def ai_resume():
+    if not os.path.exists(AI_PAUSE_MARK):
+        return {"ok": True, "message": "AI service was not paused."}
+    os.remove(AI_PAUSE_MARK)
+    r = run(["systemctl", "start", "--no-block", "ffai"])
+    return {"ok": r.returncode == 0, "message": "AI service started again." if r.returncode == 0 else r.stderr.strip()}
+
+
+def zram_setup():
+    """Compressed swap in RAM (zstd, half the memory): big slices squeeze into it instead of
+    the out-of-memory killer stopping them. Nothing is written to the SD card. Safe to repeat."""
+    try:
+        if "/dev/zram0" in open("/proc/swaps").read():
+            return {"ok": True, "message": "zram swap already on."}
+        mem_kb = int(next(l for l in open("/proc/meminfo") if l.startswith("MemTotal")).split()[1])
+        run(["modprobe", "zram"])
+        if not os.path.exists("/sys/block/zram0"):
+            return {"ok": False, "message": "This kernel has no zram."}
+        def put(path, value):
+            with open(path, "w") as f:
+                f.write(value)
+        for alg in ("zstd", "lz4", "lzo-rle"):
+            try:
+                put("/sys/block/zram0/comp_algorithm", alg)
+                break
+            except OSError:
+                pass
+        put("/sys/block/zram0/disksize", str(mem_kb // 2 * 1024))
+        run(["mkswap", "/dev/zram0"], check=True)
+        run(["swapon", "-p", "100", "/dev/zram0"], check=True)
+        put("/proc/sys/vm/swappiness", "100")
+        return {"ok": True, "message": f"zram swap on ({mem_kb // 2 // 1024} MB)."}
+    except Exception as e:  # noqa: BLE001 - report, never break the bridge start
+        return {"ok": False, "message": f"zram swap not set up: {e}"}
+
 # ----------------------------------------------------------------------------- helpers
 def run(cmd, check=False, timeout=60, input_text=None):
     try:
@@ -1154,6 +1204,12 @@ def main():
     elif cmd == "restart-ai":
         r = run(["systemctl", "restart", "ffai"])
         out({"ok": r.returncode == 0, "message": "AI service restarted." if r.returncode == 0 else r.stderr.strip()})
+    elif cmd == "ai-pause":
+        out(ai_pause())
+    elif cmd == "ai-resume":
+        out(ai_resume())
+    elif cmd == "zram-setup":
+        out(zram_setup())
     elif cmd == "system-info":
         out(system_info())
     elif cmd == "reboot":

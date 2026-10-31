@@ -68,6 +68,24 @@ Future<void> main(List<String> args) async {
   if (restored != null) host.log.info(restored);
   final engine = _arg(args, '--slicer-engine', '');
   final slicer = Slicer(host, pi, data, engineOverride: engine.isEmpty ? null : engine, repo: updateRepo);
+  // While slicing, the AI service is stopped: it holds up to 1.5 GB and busy cores the slicer
+  // needs. It starts again ~20 s after the last slice (prints are not watched in between).
+  slicer
+    ..beforeSlice = () async {
+      ai.pausedForSlicer = true;
+      if (sys.available) {
+        final r = await sys.aiPause();
+        host.log.info('Slicer started: ${r['message'] ?? r}');
+      }
+    }
+    ..afterSlices = () async {
+      if (sys.available) {
+        final r = await sys.aiResume();
+        host.log.info('Slicer done: ${r['message'] ?? r}');
+      }
+      ai.pausedForSlicer = false;
+      ai.checkHealth();
+    };
   final setup = SetupServer(
       host: host, pi: pi, ai: ai, sys: sys, webDir: setupWeb, port: setupPort, backup: backup, updater: updater, slicer: slicer);
 

@@ -49,12 +49,83 @@ class Slicer {
     return rt.existsSync() ? {'LD_LIBRARY_PATH': '${rt.path}:$engineDir/lib'} : {};
   }
 
+  /// Called before a slice starts and ~20 s after the last one ended (main: pause / resume the
+  /// AI service, so the slicer gets its memory and cores). Never called for quick lookups.
+  Future<void> Function()? beforeSlice;
+  Future<void> Function()? afterSlices;
+  Timer? _resumeTimer;
+  bool _held = false;
+
+  Future<void> _hold() async {
+    _resumeTimer?.cancel();
+    _resumeTimer = null;
+    if (_held) return;
+    _held = true;
+    try {
+      await beforeSlice?.call().timeout(const Duration(seconds: 40));
+    } catch (e) {
+      host.log.warn('Could not pause the AI for slicing: $e');
+    }
+  }
+
+  void _release() {
+    _resumeTimer?.cancel();
+    // A short wait: "Slice all plates" starts the next plate right away; no stop/start in between.
+    _resumeTimer = Timer(const Duration(seconds: 20), () async {
+      if (running != null || !_held) return;
+      _held = false;
+      try {
+        await afterSlices?.call();
+      } catch (e) {
+        host.log.warn('Could not start the AI again after slicing: $e');
+      }
+    });
+  }
+
+  static List<int>? _cpuList;
+
+  /// The cores the engine may use: the fastest ones, at most [maxSlicerCores]. The engine's
+  /// thread pool (TBB) sizes itself to these, so it never runs a worker on every core; the
+  /// other cores stay free for the printer connections and the web pages.
+  static List<int> get slicerCpus => _cpuList ??= () {
+        final cap = <int, int>{};
+        try {
+          for (final d in Directory('/sys/devices/system/cpu').listSync()) {
+            final m = RegExp(r'/cpu(\d+)$').firstMatch(d.path);
+            if (m == null) continue;
+            final n = int.parse(m.group(1)!);
+            final online = File('${d.path}/online');
+            if (online.existsSync() && online.readAsStringSync().trim() == '0') continue;
+            final c = File('${d.path}/cpu_capacity');
+            cap[n] = c.existsSync() ? int.tryParse(c.readAsStringSync().trim()) ?? 1024 : 1024;
+          }
+        } catch (_) {}
+        return pickCpus(cap, maxSlicerCores);
+      }();
+
   Future<Process> _start(List<String> args, String cwd) async {
-    // The engine's own C library path goes to the engine only: a system program started with it
-    // (nice, grep, ...) would load the wrong C library and crash.
-    final p = await Process.start(exe, args, workingDirectory: cwd, environment: _env);
-    // Lower priority than the printer connections: a long slice never makes the printer screen lag.
-    if (Platform.isLinux) Process.run('renice', ['-n', '10', '-p', '${p.pid}']).ignore();
+    final env = _env;
+    final cpus = Platform.isLinux && File('/usr/bin/taskset').existsSync() ? slicerCpus : const <int>[];
+    final Process p;
+    if (cpus.isNotEmpty) {
+      // taskset and env replace themselves with the engine (same process). The engine's own C
+      // library path goes to the engine only: a system program started with it would crash.
+      p = await Process.start('taskset', [
+        '-c', cpus.join(','),
+        if (env.isNotEmpty) ...['env', ...env.entries.map((e) => '${e.key}=${e.value}')],
+        exe, ...args,
+      ], workingDirectory: cwd);
+    } else {
+      p = await Process.start(exe, args, workingDirectory: cwd, environment: env);
+    }
+    if (Platform.isLinux) {
+      // Lower priority than the printer connections: a long slice never makes the printer screen lag.
+      Process.run('renice', ['-n', '10', '-p', '${p.pid}']).ignore();
+      // If memory runs out anyway, the kernel stops the slicer, not the bridge or the AI.
+      try {
+        File('/proc/${p.pid}/oom_score_adj').writeAsStringSync('1000');
+      } catch (_) {}
+    }
     return p;
   }
 
@@ -241,6 +312,8 @@ class Slicer {
       'defaultBedType': presets['defaultBedType'],
       'bed': bedOf(values),
       'extruders': (values['nozzle_diameter'] is List) ? (values['nozzle_diameter'] as List).length : 1,
+      // one nozzle fed by a 4-spool box (AD5X IFS): 4 colours per print
+      'singleNozzleMulti': '${values['single_extruder_multi_material']}' == '1',
     };
   }
 
@@ -441,6 +514,17 @@ class Slicer {
       if (v.contains('\n') || v.length > 4000) throw SlicerException('Setting "$k" has a value that is not allowed.');
       args.add('--${k.replaceAll('_', '-')}=$v');
     }
+    // Prime tower (several filaments): the browser picks a free spot away from the models; the
+    // engine's own default can end up partly off the bed when a plate needs a deep tower.
+    final tower = o['tower'];
+    if (tower is Map && tower['x'] is num && tower['y'] is num) {
+      final bed = (await printerInfo(printerId, machine: machine))['bed'] as Map;
+      final x = (tower['x'] as num).toDouble(), y = (tower['y'] as num).toDouble();
+      if (x < (bed['x0'] as num) || y < (bed['y0'] as num) || x > (bed['x0'] as num) + (bed['w'] as num) || y > (bed['y0'] as num) + (bed['d'] as num)) {
+        throw SlicerException('The prime tower position is outside the bed.');
+      }
+      args.addAll(['--wipe-tower-x=${x.toStringAsFixed(1)}', '--wipe-tower-y=${y.toStringAsFixed(1)}']);
+    }
     // Objects stay where they were put in the browser; output: plate_1.gcode + result.json.
     args.addAll(['--arrange', '0', '--slice', '0', '--outputdir', outDir, '--export-3mf', 'plate.gcode.3mf']);
     return args;
@@ -450,8 +534,13 @@ class Slicer {
     Directory('${j.dir}/out').createSync(recursive: true);
     final log = File('${j.dir}/engine.log').openWrite();
     try {
+      if (!_held && beforeSlice != null) j.message = 'Pausing the AI to free memory…';
+      await _hold();
+      if (j.state == 'cancelled') return;
       final p = j.process = await _start(args, j.dir);
+      var timedOut = false;
       final timer = Timer(const Duration(minutes: 90), () {
+        timedOut = true;
         j.message = 'Took too long, stopped.';
         p.kill();
       });
@@ -465,6 +554,11 @@ class Slicer {
       await err;
       if (j.state == 'cancelled') return;
       final g = File('${j.dir}/out/plate_1.gcode');
+      if (code == -9 && !timedOut) {
+        j.fail('The board ran out of memory slicing this plate. Put fewer models on it, use a larger layer height, '
+            'or simplify very detailed models, then try again.');
+        return;
+      }
       if (code != 0 || !g.existsSync()) {
         j.fail(j.error ?? _resultError(j.dir) ?? 'The slicer stopped with an error ($code).');
         return;
@@ -487,6 +581,7 @@ class Slicer {
       j.fail('$e');
     } finally {
       j.process = null;
+      _release();
       await log.close();
       final m = File('${j.dir}/plate.3mf');
       if (m.existsSync()) m.deleteSync();
@@ -680,6 +775,15 @@ class SliceJob {
 }
 
 // ------------------------------------------------------------------ pure helpers (tested)
+
+/// At most this many cores slice (A733: its 2 fast Cortex-A76 cores + 1 Cortex-A55).
+const maxSlicerCores = 3;
+
+/// The [max] cores with the highest capacity (fast cores first; same speed: lower number first).
+List<int> pickCpus(Map<int, int> capacity, int max) {
+  final ids = capacity.keys.toList()..sort((a, b) => capacity[b] != capacity[a] ? capacity[b]!.compareTo(capacity[a]!) : a.compareTo(b));
+  return (ids.take(max).toList()..sort());
+}
 
 /// "Creator 5 Pro" (what the printer reports) -> "Flashforge Creator 5 Pro" (the engine's model).
 String? matchModel(String printerModel, List<String> engineModels) {

@@ -10,6 +10,7 @@
 # that loader. Nothing on the board's system is changed: it all lives in
 # /var/lib/ffbridge/slicer/engine.
 #
+# Debug symbols and unused libraries are stripped (identical G-code, ~25% smaller).
 # Only the Flashforge printer profiles (plus Orca's generic filament library they build on)
 # are kept: the slicer can only ever pick Flashforge profiles, and the engine starts ~6x faster.
 set -euo pipefail
@@ -54,6 +55,16 @@ find "$P" -mindepth 1 -maxdepth 1 -print0 | while IFS= read -r -d '' f; do
   esac
 done
 ls "$P"
+
+echo "== strip what a command-line slicer does not need"
+# Debug symbols (~25 MB) and libraries the engine program never loads (model formats other
+# than 3MF/STL - the browser always sends 3MF). The test step slices with the result.
+strip "$E/bin/slicer_cli-orcaslicer"
+for l in "$E"/lib/*.so*; do strip --strip-unneeded "$l" 2>/dev/null || true; done
+rm -f "$E"/lib/libassimp.so* "$E"/lib/libdraco.so* "$E"/lib/libminizip.so*
+missing="$(LD_LIBRARY_PATH="$E/lib" ldd "$E/bin/slicer_cli-orcaslicer" | grep "not found" || true)"
+[ -z "$missing" ] || { echo "a needed library was removed: $missing" >&2; exit 1; }
+du -sh "$E"
 
 echo "== C library for the engine (from this runner: $(ldd --version | head -1))"
 mkdir -p "$E/rt"

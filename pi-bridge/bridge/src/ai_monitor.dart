@@ -154,6 +154,7 @@ class PrinterAiState {
 class AiServiceInfo {
   bool reachable = false;
   bool ready = false;
+  bool pausedForSlicer = false;
   String model = '';
   String backend = '';
   String error = '';
@@ -163,6 +164,7 @@ class AiServiceInfo {
   Map<String, dynamic> toJson() => {
         'reachable': reachable,
         'ready': ready,
+        'pausedForSlicer': pausedForSlicer,
         'model': model,
         'backend': backend,
         'error': error,
@@ -179,6 +181,11 @@ class AiMonitor {
   final states = <String, PrinterAiState>{};
   final service = AiServiceInfo();
   Timer? _tick, _health;
+
+  /// True while the slicer runs: the AI service is stopped to give the slicer the memory and
+  /// CPU cores, and no checks are made (a print is not watched during that time).
+  bool get pausedForSlicer => service.pausedForSlicer;
+  set pausedForSlicer(bool v) => service.pausedForSlicer = v;
   final _http = HttpClient()..connectionTimeout = const Duration(seconds: 3);
 
   AiMonitor(this.host, this.pi, this.serviceUrl, this.log);
@@ -187,6 +194,7 @@ class AiMonitor {
     _tick = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
     // Poll quickly until the service answers (model loading after boot), then every 30 s.
     _health = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (pausedForSlicer) return;
       final age = DateTime.now().difference(service.checkedAt ?? DateTime(2000)).inSeconds;
       if (!service.ready || age >= 30) checkHealth();
     });
@@ -263,6 +271,11 @@ class AiMonitor {
               ? (b.jobState == 'paused' ? 'Print is paused.' : 'Waiting for a print to start.')
               : 'Printer is offline.';
         }
+        continue;
+      }
+      if (pausedForSlicer) {
+        s.status = 'paused-slicer';
+        s.message = 'Paused while the slicer is working. Starts again by itself when slicing is done.';
         continue;
       }
       if (!b.hasCamera) {

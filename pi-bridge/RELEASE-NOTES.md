@@ -26,4 +26,14 @@ setup page, Spoolman, Discord, and AI print-failure detection (Obico model, runs
   - Paint tools like OrcaSlicer: circle, sphere, triangle, height range, fill with edge detection (smart fill) and gap fill, Shift to erase, section view, filament remap — for colours, support enforcers / blockers (with overhang highlighting) and seam enforcers / blockers.
   - Only the Flashforge profiles of the printer you have open can be used. A project made for another printer keeps its models and colours but never switches the printer or its settings.
   - Switch the slicer off in the same Settings card to hide it.
+- **Projects from other printers open properly:** every model lands on a plate (the project's own bed size is read; models beside the plates get their own plate), its colours come along, and its support / infill / wall / brim settings are kept.
+- **Drag models** with the mouse or a finger, also onto other plates; dragging past the last plate makes a new one. The add-plate button is now labelled **+ Plate**.
+- **More colours than heads:** up to 16 filaments per project. Each plate is sliced with only the colours it uses, so plates can use different spools. A plate with more colours than the printer holds asks which filament prints each extra colour (or cancel and repaint).
+- Slicing no longer stops on painted supports when Supports is off (they are left out, with a note), and the prime tower is placed in a free spot on the plate instead of hanging off the back.
+- **Slicing on the board is lighter and safer:**
+  - The AI failure detection pauses while the slicer works (it holds up to 1.5 GB of memory) and starts again by itself shortly after. Prints are not watched during that time.
+  - The slicer uses at most 3 cores (the 2 fast ones first), so the bridge and web pages stay responsive.
+  - Compressed swap in memory (zram) gives big slices room; nothing is written to the SD card.
+  - If memory still runs out, only the slicer is stopped and you get a clear message, never the bridge.
+  - The slicer engine is ~25% smaller (debug data and unused libraries removed; same G-code).
 - The bridge is now called **Flash Bridge** (the address http://ffbridge.local stays the same).

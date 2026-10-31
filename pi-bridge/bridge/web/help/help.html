@@ -96,7 +96,7 @@ wifi_password=YourWiFiPassword</pre>
   </ol>
   <figure><img src="help/img/files.jpg" alt="File list" loading="lazy"><figcaption>The coloured dots show which filament colours the file uses. “On the printer” files were sent to the printer some other way (FlashPrint, the printer's own storage).</figcaption></figure>
   <figure><img src="help/img/print-dialog.jpg" alt="Print window with filament matching" loading="lazy" style="max-width:640px"><figcaption>The print window. For multi-colour files it shows which slot each filament will use — see <a href="#help/colours">Multi-colour prints</a>.</figcaption></figure>
-  <p>Files have to be <b>sliced</b> already (OrcaSlicer, FlashPrint, Orca-FlashForge). The bridge does not slice models.</p>
+  <p>Files have to be <b>sliced</b> — in OrcaSlicer, FlashPrint, Orca-FlashForge, or with the bridge's own <a href="#help/slicer">slicer</a>.</p>
   <p><b>Delete</b> removes a file from the board only. Files stored on the printer itself can only be deleted on the printer's screen.</p>
 </section>
 
@@ -271,11 +271,12 @@ ssh_password=            at least 6 characters</pre>
     <li><b>Add</b> STL, OBJ or 3MF files with the + button or by dropping them on the 3D view. Modifier / helper parts in a project are left out.</li>
     <li>Click a model to select it, then <b>Move (M)</b>, <b>Rotate (R)</b> or <b>Scale (S)</b> with the handles, or type exact numbers in the Objects card. Models always sit on the plate.</li>
     <li><b>Lay on face (F)</b>: click the side that should be on the plate. <b>Auto-orient</b> puts the biggest flat side down. <b>Arrange</b> spreads everything out on the plate.</li>
-    <li><b>Filaments</b>: one row per head / slot. <b>Use loaded</b> copies what is loaded in the printer. Each object has its own filament (the number next to its name).</li>
+    <li><b>Filaments</b>: the colours of your project — up to 16, more than the printer has heads (<b>+ Add filament</b>, × removes one). A project brings its own colours. <b>Use loaded</b> gives the first ones the spools loaded in the printer. Each object has its own filament (the number next to its name).</li>
+    <li>Each plate is sliced with only the filaments it uses, so one plate can use four colours and the next four others — you swap spools between plates. If a plate uses more colours than the printer can hold at once, the slicer asks which filament prints each extra colour (the closest colour is suggested; your painting is not changed). Cancel to repaint instead.</li>
     <li><b>Quality</b>: the profile plus the most-used settings. <b>All settings</b> has everything else (search for "ironing", "seam", "speed" …). Changed settings are blue; ↺ puts one back.</li>
   </ul>
   <h3>Plates</h3>
-  <p>Like OrcaSlicer, you can have several plates side by side. The tabs at the top of the 3D view switch plates; <b>+</b> adds one (Page Up / Page Down also switch). A model belongs to the plate it stands on: drag it across, or select it and use <b>Move to</b> in the Plate card. <b>Arrange</b> packs the current plate; what does not fit goes onto the next plate. Projects with several plates (MakerWorld, Bambu, Orca) open with all their plates.</p>
+  <p>Like OrcaSlicer, you can have several plates side by side. The tabs at the top of the 3D view switch plates; <b>+ Plate</b> adds one (Page Up / Page Down also switch). <b>Drag a model</b> with the mouse or a finger to move it on the plate or onto another plate — dragging it past the last plate makes a new one. A model belongs to the plate it stands on; <b>Move to</b> in the Plate card works too. <b>Arrange</b> packs the current plate; what does not fit goes onto the next plate. Projects with several plates (MakerWorld, Bambu, Orca) open with all their plates, each centred on one of yours; models that sat beside the plates in the project get a plate of their own. The project's support, infill, wall and brim settings come along (shown in a message; change them under Quality → All settings).</p>
   <p>Every plate is sliced and printed on its own: in Preview the tabs switch between plates (a plate is sliced when you open it), <b>Slice all plates</b> does them one after another, and <b>Print plate N…</b> prints the one you are looking at. A green dot on a tab means its slice is up to date.</p>
   <h3>Paint</h3>
   <p>Three things can be painted, as in OrcaSlicer: <b>Colour</b> (which filament), <b>Supports</b> (blue = support here, red = never support here) and <b>Seam</b> (blue = put the seam here, red = never here).</p>
@@ -296,6 +297,8 @@ ssh_password=            at least 6 characters</pre>
   <ul>
     <li>The models live in this browser tab until you slice; reloading the page empties the plate (the last slice stays).</li>
     <li>Very big models (millions of triangles) are slow on phones; a PC works best for painting.</li>
+    <li>While the slicer works, <b>AI failure detection is paused</b> so the slicer gets the board's memory and processor. It starts again by itself about 20 seconds after the last slice. A print that is running is not watched during that time.</li>
+    <li>The slicer uses at most 3 processor cores, so the printer screens and web pages stay quick. If a plate is too big for the board's memory, the slice stops with a message (the bridge keeps running): put fewer models on that plate or use a larger layer height.</li>
     <li>The engine is the OrcaSlicer engine packaged by Helio Additive (slicer-cli), AGPL-3.0. The <b>source</b> link is under the slice button.</li>
   </ul>
 </section>

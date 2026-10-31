@@ -44,6 +44,9 @@ class SystemControl {
   Future<Map<String, dynamic>> reboot() => _run(['reboot']);
   Future<Map<String, dynamic>> shutdown() => _run(['shutdown']);
   Future<Map<String, dynamic>> restartAi() => _run(['restart-ai']);
+  // While the slicer runs the AI service is stopped (it holds up to 1.5 GB and busy CPU cores).
+  Future<Map<String, dynamic>> aiPause() => _run(['ai-pause']);
+  Future<Map<String, dynamic>> aiResume() => _run(['ai-resume']);
   Future<Map<String, dynamic>> updateStart(String baseUrl) => _run(['update-start', baseUrl]);
   Future<Map<String, dynamic>> systemInfo() => _run(['system-info']);
   // Printer network (router mode): the board's Wi-Fi becomes a private network for the printers.

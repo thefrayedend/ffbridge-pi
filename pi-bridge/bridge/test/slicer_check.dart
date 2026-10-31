@@ -17,6 +17,11 @@ void check(String name, bool ok, [Object? detail]) {
 Future<void> main() async {
   // --- printer -> engine model
   const models = ['Flashforge AD5X', 'Flashforge Adventurer 5M', 'Flashforge Adventurer 5M Pro', 'Flashforge Creator 5', 'Flashforge Creator 5 Pro', 'Flashforge Guider4'];
+  // cores for the engine: A733 = cpu0-5 Cortex-A55 (capacity ~400), cpu6-7 Cortex-A76 (1024)
+  final a733 = {for (var i = 0; i < 6; i++) i: 400, 6: 1024, 7: 1024};
+  check('A733: both fast cores + one small core', pickCpus(a733, 3).join(',') == '0,6,7', pickCpus(a733, 3));
+  check('4 equal cores: first 3', pickCpus({0: 1024, 1: 1024, 2: 1024, 3: 1024}, 3).join(',') == '0,1,2');
+  check('2 cores: both', pickCpus({0: 1024, 1: 1024}, 3).join(',') == '0,1');
   check('Creator 5 Pro', matchModel('Creator 5 Pro', models) == 'Flashforge Creator 5 Pro');
   check('Creator 5 is not taken for the Pro', matchModel('Creator 5', models) == 'Flashforge Creator 5');
   check('Adventurer 5M Pro', matchModel('Adventurer 5M Pro', models) == 'Flashforge Adventurer 5M Pro');

@@ -38,7 +38,8 @@ const S = {
   process: '', bedType: '', filaments: [], overrides: {},
   objects: [], selected: null, tool: 'move',
   nPlates: 1, plate: 0,
-  res: [], // per plate: {job, key, g (parsed G-code)}
+  res: [], // per plate: {job, key, g (parsed G-code), tools (filament number per tool)}
+  merge: {}, // per plate: {u: used filaments, map: {extra filament: filament it prints with}}
   paint: { ch: 'color', tool: 'circle', filament: 2, mark: 1, size: 3, height: 2, smart: true, angle: 30, gap: 2, clip: 100, overhang: false, ohAngle: 30 },
   previewColor: 'tool', hiddenFeatures: new Set(), layer: 0,
   undo: [],
@@ -139,17 +140,20 @@ async function loadValues() {
 }
 
 /** Filaments: one per printer slot / head, matched to the loaded spools. */
+const MAX_FILAMENTS = 16;
+/** The printer's filament profile for a material (PLA, PETG …): Flashforge's own first. */
+function pickPreset(material, info = S.info) {
+  const list = info.filaments;
+  const fam = F.family(material || 'PLA');
+  const tries = [(f) => f.startsWith(`Flashforge ${fam} Basic`), (f) => f.startsWith(`Generic ${fam} @`), (f) => f.startsWith(`Flashforge ${fam}`) && !/-CF|-GF/.test(f), (f) => F.family(f.replace(/^(Flashforge|Generic)\s+/, '')) === fam];
+  for (const t of tries) { const m = list.find(t); if (m) return m; }
+  return list.find((f) => /PLA Basic/.test(f)) || list[0];
+}
 function defaultFilaments(info, saved) {
   const p = F.current();
   const slots = (p && p.slots) || [];
-  const n = Math.max(1, Math.min(16, slots.length || info.extruders || 1));
-  const list = info.filaments;
-  const pick = (material) => {
-    const fam = F.family(material || 'PLA');
-    const tries = [(f) => f.startsWith(`Flashforge ${fam} Basic`), (f) => f.startsWith(`Generic ${fam} @`), (f) => f.startsWith(`Flashforge ${fam}`) && !/-CF|-GF/.test(f), (f) => F.family(f.replace(/^(Flashforge|Generic)\s+/, '')) === fam];
-    for (const t of tries) { const m = list.find(t); if (m) return m; }
-    return list.find((f) => /PLA Basic/.test(f)) || list[0];
-  };
+  const n = Math.max(1, Math.min(MAX_FILAMENTS, Math.max(saved ? saved.length : 0, slots.length || info.extruders || 1)));
+  const pick = (material) => pickPreset(material, info);
   const out = [];
   for (let i = 0; i < n; i++) {
     const s = slots[i];
@@ -162,7 +166,8 @@ function useLoaded() {
   const p = F.current();
   const slots = (p && p.slots) || [];
   if (!slots.length) { F.toast('The printer did not report any loaded filament.', true); return; }
-  S.filaments = defaultFilaments(S.info, null);
+  const loaded = defaultFilaments(S.info, null);
+  S.filaments = loaded.concat(S.filaments.slice(loaded.length)); // extra project filaments stay
   savePrefs();
   for (const o of S.objects) recolor(o);
   renderSide(); invalidate();
@@ -311,7 +316,7 @@ function renderPlateBar() {
     return '';
   };
   bar.innerHTML = Array.from({ length: S.nPlates }, (_, i) => `<button data-plate="${i}" class="${i === S.plate ? 'active' : ''}" title="Plate ${i + 1}: ${platesObjects(i).length} object(s)">${dot(i)}Plate ${i + 1}<span>${platesObjects(i).length}</span></button>`).join('')
-    + (S.mode === 'preview' ? '' : '<button data-sl="addplate" title="Add a plate">+</button>');
+    + (S.mode === 'preview' ? '' : '<button data-sl="addplate" class="add" title="Add an empty plate (or drag a model past the last plate)">+ Plate</button>');
 }
 
 /** Makes plate i the current one; the camera follows. */
@@ -342,7 +347,7 @@ async function deletePlate(i) {
   // plates after it move one place to the left
   for (const o of S.objects) if (o.plate > i) { o.mesh.position.x -= stride(); o.mesh.updateMatrixWorld(true); }
   S.nPlates--;
-  S.res = []; S.undo = [];
+  S.res = []; S.undo = []; S.merge = {};
   if (S.selected && objs.includes(S.selected)) S.selected = null;
   S.plate = Math.min(S.plate, S.nPlates - 1);
   checkBounds(); buildBed(); viewHome(); renderSide();
@@ -467,7 +472,7 @@ function fixScale(o) {
   s.set(Math.max(0.01, Math.abs(s.x)), Math.max(0.01, Math.abs(s.y)), Math.max(0.01, Math.abs(s.z)));
 }
 /** Works out every object's plate and whether it is (partly) off its plate. */
-function checkBounds() {
+function checkBounds(light = false) {
   const b = bed();
   for (const o of S.objects) {
     const w = worldBox(o);
@@ -477,7 +482,7 @@ function checkBounds() {
     o.mesh.material.emissive.setHex(o.outside ? 0x5a0d0d : (o === S.selected && S.mode === 'prepare' ? 0x10294d : 0x000000));
   }
   $('#sl-empty').classList.toggle('hidden', !!S.objects.length || S.mode === 'preview');
-  renderPlateBar();
+  if (!light) renderPlateBar(); // (light: while dragging; the plate tabs hash every model)
   invalidate();
 }
 
@@ -673,20 +678,23 @@ function placeNew(o) {
 
 /**
  * Opens a project with all its plates. Bambu / Orca lay plates out in a grid (columns = √count,
- * gap = 1/5 of the bed); their positions are worked back from that so every plate keeps its
- * layout, then each plate goes onto one of ours (new plates after the ones in use).
+ * gap = 1/5 of the bed of the printer it was made for, read from the project). Every plate keeps
+ * its layout, centred on one of ours (new plates after the ones in use). Models that were not on
+ * any plate in the project get their own plate. Its filaments join the project's filament list.
  */
 async function add3mf(buf, base) {
   const r = import3mf(buf);
   const byId = new Map(r.objects.map((o) => [o.id, o]));
-  const groups = r.plates.length ? r.plates.map((p) => p.objectIds.map((id) => byId.get(id)).filter(Boolean)) : [r.objects];
-  const assigned = new Set(groups.flat());
+  const groups = r.plates.map((p) => ({ id: p.id, list: p.objectIds.map((id) => byId.get(id)).filter(Boolean) }));
+  const assigned = new Set(groups.flatMap((g) => g.list));
   const loose = r.objects.filter((o) => !assigned.has(o));
-  if (loose.length) groups[0] = [...(groups[0] || []), ...loose];
-  const used = groups.filter((g) => g.length);
+  if (!groups.length) groups.push({ id: 0, list: loose.splice(0) }); // plain 3MF: one plate
+  const used = groups.filter((g) => g.list.length);
   // first plate to fill: the current one if it is empty, else a new one after the last used plate
-  let first = platesObjects(S.plate).length ? Math.max(...S.objects.map((o) => o.plate)) + 1 : S.plate;
-  if (!S.objects.length) first = 0;
+  let first = S.objects.length ? (platesObjects(S.plate).length ? lastPlate() + 1 : S.plate) : 0;
+  const fresh = !S.objects.length;
+  const fmap = takeFilaments(r, fresh);
+  const kept = fresh ? takeSettings(r.settings || {}) : [];
   const b = bed();
   const boxOf = (list) => {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -696,36 +704,33 @@ async function add3mf(buf, base) {
     }
     return { x0, y0, x1, y1 };
   };
-  // Bambu / Orca save every plate at its place in a grid: plate (col, row) starts at
-  // x = col * 1.2 * width, y = -row * 1.2 * depth of the printer it was made for.
-  // Find the source bed size for which every plate's models sit inside one grid cell,
-  // then move each plate so the source plate's centre lands on our plate's centre.
-  const beds = [[256, 256], [180, 180], [350, 320], [b.w, b.d], [220, 220], [235, 235], [250, 210], [300, 300], [320, 320], [400, 400]];
-  const boxes = used.map(boxOf);
-  const cellOf = (bx, w, d) => {
+  // Where a plate's area was in the project: from the plate number when the project names its
+  // printer's bed, otherwise the bed size that puts the models inside one grid cell.
+  const inCell = (bx, c) => bx.x0 >= c.x0 - 2 && bx.x1 <= c.x0 + c.w + 2 && bx.y0 >= c.y0 - 2 && bx.y1 <= c.y0 + c.d + 2;
+  const cellById = (id, sb) => {
+    const cols = Math.ceil(Math.sqrt(Math.max(1, r.plateCount))), n = id - 1;
+    return { x0: (n % cols) * sb.w * 1.2 + sb.x0, y0: -Math.floor(n / cols) * sb.d * 1.2 + sb.y0, w: sb.w, d: sb.d };
+  };
+  const cellByPos = (bx, w, d) => {
     const sx = w * 1.2, sy = d * 1.2;
     const col = Math.round(((bx.x0 + bx.x1) / 2 - w / 2) / sx), row = Math.round(-((bx.y0 + bx.y1) / 2 - d / 2) / sy);
-    const ox = col * sx, oy = -row * sy;
-    const inside = col >= 0 && row >= 0 && bx.x0 >= ox - 2 && bx.x1 <= ox + w + 2 && bx.y0 >= oy - 2 && bx.y1 <= oy + d + 2;
-    return inside ? { cx: ox + w / 2, cy: oy + d / 2 } : null;
+    const c = { x0: col * sx, y0: -row * sy, w, d };
+    return col >= 0 && row >= 0 && inCell(bx, c) ? c : null;
   };
-  // the bed size that explains the most plates (first in the list wins a tie)
-  let src = null, best = 0;
-  for (const [w, d] of beds) {
-    const n = boxes.filter((bx) => cellOf(bx, w, d)).length;
-    if (n > best) { best = n; src = [w, d]; }
+  const beds = [[256, 256], [180, 180], [330, 320], [350, 320], [b.w, b.d], [220, 220], [235, 235], [250, 210], [300, 300], [320, 320], [400, 400]];
+  const boxes = used.map((g) => boxOf(g.list));
+  let guess = null, best = 0;
+  if (!r.bed) for (const [w, d] of beds) {
+    const n = boxes.filter((bx) => cellByPos(bx, w, d)).length;
+    if (n > best) { best = n; guess = [w, d]; }
   }
   const added = [];
-  let k = 0;
-  for (const list of used) {
-    const target = first + k;
-    const bx = boxes[k++];
+  const place = (list, bx, cell, target) => {
     if (target >= S.nPlates) S.nPlates = target + 1;
-    const cell = src && cellOf(bx, src[0], src[1]);
     const mx = b.x0 + b.w / 2, my = b.y0 + b.d / 2;
     // keep the layout of the source plate (centred), or centre the models when unknown
-    let dx = cell ? mx - cell.cx : mx - (bx.x0 + bx.x1) / 2;
-    let dy = cell ? my - cell.cy : my - (bx.y0 + bx.y1) / 2;
+    let dx = cell ? mx - (cell.x0 + cell.w / 2) : mx - (bx.x0 + bx.x1) / 2;
+    let dy = cell ? my - (cell.y0 + cell.d / 2) : my - (bx.y0 + bx.y1) / 2;
     // the source plate was bigger and the models would hang over the edge: centre them
     if (bx.x1 + dx > b.x0 + b.w + 1 || bx.x0 + dx < b.x0 - 1 || bx.y1 + dy > b.y0 + b.d + 1 || bx.y0 + dy < b.y0 - 1) {
       dx = mx - (bx.x0 + bx.x1) / 2; dy = my - (bx.y0 + bx.y1) / 2;
@@ -734,26 +739,91 @@ async function add3mf(buf, base) {
     for (const o of list) {
       const pos = o.positions;
       for (let i = 0; i < pos.length; i += 3) { pos[i] += dx; pos[i + 1] += dy; }
-      const obj = addObject({ name: o.name || base, positions: pos, codes: o.paint, sup: o.sup, seam: o.seam, filament: o.filament });
+      const obj = addObject({ name: o.name || base, positions: pos, codes: o.paint, sup: o.sup, seam: o.seam, filament: fmap(o.filament) });
+      const st = obj.states;
+      for (let i = 0; i < st.length; i++) if (st[i]) st[i] = fmap(st[i]);
+      recolor(obj);
       obj.plate = target;
       dropToBed(obj);
       added.push(obj);
     }
+  };
+  let target = first;
+  used.forEach((g, k) => {
+    const bx = boxes[k];
+    let cell = r.bed && g.id ? cellById(g.id, r.bed) : null;
+    if (cell && !inCell(bx, cell)) cell = null;
+    if (!cell && guess) cell = cellByPos(bx, guess[0], guess[1]);
+    place(g.list, bx, cell, target++);
+  });
+  // models that sat beside the plates in the project: a plate of their own, packed (more plates if needed)
+  if (loose.length) {
+    const t = target;
+    for (const o of loose) place([o], boxOf([o]), null, t);
+    arrange(t, false);
   }
-  // Loop, not Math.max(...states): painted models have millions of states, and
-  // spreading that many arguments throws ("too many function arguments").
+  // a plain 3MF that names more filaments than the list has: add filaments for them
   let maxFil = 0;
   for (const o of added) {
     if (o.filament > maxFil) maxFil = o.filament;
-    const st = o.states || [];
+    const st = o.states;
     for (let i = 0; i < st.length; i++) if (st[i] > maxFil) maxFil = st[i];
   }
-  if (maxFil > S.filaments.length) F.toast(`This project uses ${maxFil} filaments; your printer has ${S.filaments.length}. Parts on filament ${S.filaments.length + 1}+ show grey — pick other filaments for them.`, true);
+  if (maxFil > S.filaments.length) { while (S.filaments.length < maxFil) addFilament(false); added.forEach(recolor); }
+  const plates = new Set(added.map((o) => o.plate)).size;
+  if (kept.length) F.toast(`Kept the project's print settings: ${kept.join(', ')}. Change them under Quality → All settings.`);
   if (r.skipped) F.toast(`${r.skipped} modifier / helper part${r.skipped === 1 ? ' was' : 's were'} left out (only printable parts are opened).`);
-  F.toast(`Opened ${base}: ${added.length} object${added.length === 1 ? '' : 's'} on ${used.length} plate${used.length === 1 ? '' : 's'}. Your printer's own profiles are used, not the ones saved in the project.`);
+  F.toast(`Opened ${base}: ${added.length} object${added.length === 1 ? '' : 's'} on ${plates} plate${plates === 1 ? '' : 's'}${loose.length ? ` (${loose.length} that were beside the plates got a plate of their own)` : ''}. Your printer's own profiles are used, not the ones saved in the project.`);
   checkBounds();
+  renderSide();
   setPlate(first);
   if (added.length) select(added.find((o) => o.plate === first) || added[0]);
+}
+const lastPlate = () => S.objects.reduce((m, o) => Math.max(m, o.plate), 0);
+
+/**
+ * The project's filaments join ours: same colour and material = same filament, others are added
+ * (up to 16). Into an empty workspace the project's filaments replace ours, in its order.
+ * Returns project filament number -> our filament number.
+ */
+function takeFilaments(r, fresh) {
+  const cols = r.colours || [];
+  if (!cols.length) return (f) => Math.min(Math.max(1, f || 1), MAX_FILAMENTS); // list grows to fit after placing
+  if (fresh) S.filaments = [];
+  const map = cols.map((c, k) => {
+    const preset = pickPreset(r.types[k] || 'PLA');
+    let n = S.filaments.findIndex((f) => f.color.toUpperCase() === c && F.family(f.preset) === F.family(preset));
+    if (n < 0 && S.filaments.length < MAX_FILAMENTS) { S.filaments.push({ color: c, preset }); n = S.filaments.length - 1; }
+    if (n < 0) n = nearestFilament(c);
+    return n + 1;
+  });
+  if (!S.filaments.length) S.filaments = defaultFilaments(S.info, null);
+  savePrefs();
+  return (f) => map[(f || 1) - 1] || 1;
+}
+/** Takes the project's support / infill / wall / brim settings (only valid values of known settings). */
+function takeSettings(set) {
+  const byKey = new Map((S.schema || []).map((s) => [s.key, s]));
+  const kept = [];
+  for (const [k, v] of Object.entries(set)) {
+    const sc = byKey.get(k);
+    if (!sc || v === '' || v === 'nil') continue;
+    if (sc.type === 'enum' && !sc.enum.some((e) => e.value === v)) continue;
+    if (sc.type === 'bool' && !/^(0|1|true|false)$/.test(v)) continue;
+    if ((sc.type === 'int' || sc.type === 'float') && !Number.isFinite(+v)) continue;
+    if (String(fmtVal(S.values[k])) === v) { delete S.overrides[k]; continue; }
+    S.overrides[k] = v;
+    const label = sc.label || k;
+    const shown = sc.type === 'bool' ? (/^(1|true)$/.test(v) ? 'on' : 'off') : sc.type === 'enum' ? (sc.enum.find((e) => e.value === v) || {}).label || v : v;
+    kept.push(`${label} ${shown}`);
+  }
+  if (kept.length) savePrefs();
+  return kept;
+}
+function nearestFilament(color) {
+  let best = 0, bd = Infinity;
+  S.filaments.forEach((f, i) => { const d = F.colorDiff(f.color, color); if (d < bd) { bd = d; best = i; } });
+  return best;
 }
 
 function frameObjects() {
@@ -810,9 +880,59 @@ function plateHitAt(e) {
 }
 
 const DRAG_TOOLS = new Set(['circle', 'sphere', 'triangle', 'height']);
+
+// ---- drag a model across the bed (and onto other plates) with the mouse or a finger
+let dragging = null; // {obj, plane, off: Vector3, start: Matrix4, moved}
+const floorHit = (e, plane) => {
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  return raycaster.ray.intersectPlane(plane, new THREE.Vector3());
+};
+function startDrag(e) {
+  if (S.tool === 'face' || tcontrols.axis) return; // lay-on-face clicks / the arrows handle themselves
+  const h = hitAt(e);
+  if (!h) return; // empty space: turn the view
+  e.stopPropagation(); e.preventDefault();
+  const o = h.object.userData.obj;
+  const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -h.point.z);
+  const p = floorHit(e, plane);
+  if (!p) return;
+  dragging = { obj: o, plane, off: o.mesh.position.clone().sub(p), start: o.mesh.matrix.clone(), moved: false, x: e.clientX, y: e.clientY };
+  renderer.domElement.setPointerCapture(e.pointerId);
+  renderer.domElement.style.cursor = 'grabbing';
+}
+function moveDrag(e) {
+  const d = dragging;
+  if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
+  const p = floorHit(e, d.plane);
+  if (!p) return;
+  if (!d.moved) { d.moved = true; if (S.selected !== d.obj) select(d.obj); }
+  d.obj.mesh.position.x = p.x + d.off.x;
+  d.obj.mesh.position.y = p.y + d.off.y;
+  d.obj.mesh.updateMatrixWorld(true);
+  // dragged past the last plate: a new plate appears there
+  const b = bed(), st = stride(), w = worldBox(d.obj);
+  const raw = Math.floor(((w.min.x + w.max.x) / 2 - b.x0 + (st - b.w) / 2) / st);
+  if (raw === S.nPlates && S.nPlates < 99) { S.nPlates++; buildBed(); }
+  checkBounds(true); // plate follows the model, red when it hangs off
+  renderXf();
+}
+function endDrag() {
+  const d = dragging;
+  dragging = null;
+  renderer.domElement.style.cursor = '';
+  if (!d.moved) return false;
+  pushUndo({ type: 'xf', obj: d.obj, m: d.start });
+  checkBounds();
+  if (d.obj.plate !== S.plate) setPlate(d.obj.plate); // the view follows the model
+  else { renderPlateBar(); renderSide(); }
+  return true;
+}
 async function onPointerDown(e) {
   if (e.target !== renderer.domElement || e.button !== 0) return;
   downAt = [e.clientX, e.clientY];
+  if (S.mode === 'prepare') { startDrag(e); return; }
   if (S.mode !== 'paint') return;
   const h = hitAt(e);
   if (!h) return; // no model under the cursor: turn the view
@@ -827,6 +947,11 @@ async function onPointerDown(e) {
   else { painting.once = true; await applyOnce(h); finishStroke(); }
 }
 function onPointerMove(e) {
+  if (dragging) { moveDrag(e); return; }
+  if (S.mode === 'prepare' && !tcontrols.dragging) {
+    renderer.domElement.style.cursor = S.tool !== 'face' && e.buttons === 0 && hitAt(e) ? 'grab' : '';
+    return;
+  }
   if (S.mode !== 'paint') return;
   const h = hitAt(e);
   if (h) {
@@ -837,6 +962,7 @@ function onPointerMove(e) {
 }
 function onPointerUp(e) {
   if (painting) { if (!painting.once) finishStroke(); return; }
+  if (dragging) { const moved = endDrag(); if (moved) { downAt = null; return; } }
   if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4 || tcontrols.dragging) { downAt = null; return; }
   downAt = null;
   if (S.mode === 'preview') { const pl = plateHitAt(e); if (pl != null && pl !== S.plate) setPlate(pl, false); return; }
@@ -1027,7 +1153,7 @@ function renderTools() {
     gap: 'Click a model: fills small unpainted gaps with the paint around them',
   }[S.paint.tool];
   const hints = {
-    prepare: S.tool === 'face' ? 'Tap the side of a model that should lie on the plate' : (S.objects.length ? (touch ? 'Tap a model to select it · one finger turns the view · two fingers zoom and move' : 'Click a model to select it · drag to turn the view · right-drag to pan · wheel to zoom') : ''),
+    prepare: S.tool === 'face' ? 'Tap the side of a model that should lie on the plate' : (S.objects.length ? (touch ? 'Drag a model to move it (past the last plate makes a new one) · one finger on empty space turns the view · two fingers zoom and move' : 'Drag a model to move it, also onto another plate (past the last one makes a new plate) · drag empty space to turn the view · right-drag to pan · wheel to zoom') : ''),
     paint: touch ? ptip : `${ptip} · Shift = erase · Alt+wheel = size · Ctrl+wheel = section`,
     preview: '',
   };
@@ -1085,10 +1211,46 @@ function printerCard() {
 
 function filamentsCard(withPresets = true) {
   const p = F.current();
-  return `<div class="card"><h2>Filaments ${(p && p.slots && p.slots.length) ? '<button class="btn tiny" data-sl="loaded" title="Use the spools loaded in the printer">Use loaded</button>' : ''}</h2>
+  const heads = headCount();
+  const many = S.filaments.length > 1;
+  return `<div class="card"><h2>Filaments ${(p && p.slots && p.slots.length) ? '<button class="btn tiny" data-sl="loaded" title="Give filaments 1–' + p.slots.length + ' the spools loaded in the printer">Use loaded</button>' : ''}</h2>
     <div class="sl-fils">${S.filaments.map((f, i) => `<div class="sl-fil"><span class="n">${i + 1}</span>
       <input type="color" value="${esc(f.color)}" data-fil-color="${i}" title="Colour of filament ${i + 1}">
-      ${withPresets ? `<select data-fil-preset="${i}">${S.info.filaments.map((x) => `<option ${x === f.preset ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>` : `<span class="small">${esc(f.preset.replace(/ @.*$/, ''))}</span>`}</div>`).join('')}</div></div>`;
+      ${withPresets ? `<select data-fil-preset="${i}">${S.info.filaments.map((x) => `<option ${x === f.preset ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>` : `<span class="small">${esc(f.preset.replace(/ @.*$/, ''))}</span>`}
+      ${many ? `<button class="btn tiny ghost" data-fil-del="${i}" title="Remove filament ${i + 1} (its parts go to filament 1)">×</button>` : ''}</div>`).join('')}</div>
+    <div class="row gap wrap" style="align-items:center;margin-top:6px">${S.filaments.length < MAX_FILAMENTS ? '<button class="btn tiny" data-sl="addfil">+ Add filament</button>' : ''}
+      <span class="small muted">${S.filaments.length > heads ? `Each plate can use any ${heads} of these (the printer has ${heads} head${heads === 1 ? '' : 's'}); plates may use different ones.` : ''}</span></div></div>`;
+}
+/** Heads (tools / filament slots) the printer can print with in one go. */
+function headCount() {
+  const p = F.current();
+  const slots = (p && p.id === S.printerId && p.slots && p.slots.length) || 0;
+  const heads = (S.info && S.info.extruders) || 1;
+  if (slots) return Math.max(heads, slots);
+  return S.info && S.info.singleNozzleMulti ? Math.max(heads, 4) : heads;
+}
+function addFilament(render = true) {
+  if (S.filaments.length >= MAX_FILAMENTS) return;
+  const palette = ['#E8E8E8', '#202020', '#D32F2F', '#1E63D6', '#2E7D32', '#F9A825', '#8E24AA', '#EF6C00', '#00897B', '#6D4C41', '#C2185B', '#546E7A'];
+  const color = palette.find((c) => !S.filaments.some((f) => f.color.toUpperCase() === c)) || '#888888';
+  S.filaments.push({ color, preset: (S.filaments[0] && S.filaments[0].preset) || pickPreset('PLA') });
+  savePrefs();
+  if (render) renderSide();
+}
+function removeFilament(k) { // k: 1-based
+  if (S.filaments.length <= 1) return;
+  const fix = (v) => (v === k ? 1 : v > k ? v - 1 : v);
+  for (const o of S.objects) {
+    o.filament = fix(o.filament);
+    const st = o.states;
+    for (let i = 0; i < st.length; i++) if (st[i]) st[i] = fix(st[i]);
+  }
+  S.filaments.splice(k - 1, 1);
+  if (S.paint.filament > S.filaments.length) S.paint.filament = 1;
+  S.undo = S.undo.filter((u) => u.type !== 'paint'); // paint undo records use the old numbering
+  savePrefs();
+  for (const o of S.objects) recolor(o);
+  renderSide(); invalidate();
 }
 
 const fmtVal = (v) => (Array.isArray(v) ? v[0] : v);
@@ -1219,6 +1381,9 @@ function previewPanel() {
   const st = j.stats || {};
   const used = (st.grams || []).map((g, i) => [i, g, (st.meters || [])[i]]).filter((x) => x[1] > 0);
   const stale = r.key !== plateKey(S.plate);
+  const fil = toolFilaments(S.plate);
+  const mg = S.merge[S.plate];
+  const mergeNote = mg && Object.keys(mg.map).length ? `<p class="small muted" style="margin-top:6px">${Object.entries(mg.map).map(([a, b]) => `Colour ${a} prints with filament ${b}`).join(' · ')} (the printer holds ${headCount()}). <button class="btn tiny" data-sl="remerge">Change</button></p>` : '';
   const q = `plate=${S.plate + 1}`;
   return `<div class="card"><h2>${esc(j.name.replace(/\.gcode(\.3mf)?$/, ''))}</h2>
       ${stale ? '<div class="notice warn">The plate changed since this slice. <button class="btn tiny" data-sl="slice">Slice again</button></div>' : ''}
@@ -1226,7 +1391,8 @@ function previewPanel() {
       <div class="row gap wrap small muted"><span>${st.layers || 0} layers</span><span>${(st.totalGrams || 0).toFixed(1)} g</span>${st.changes ? `<span>${st.changes} filament changes</span>` : ''}</div></div>
       ${allBtn ? `<div style="margin-top:10px">${allBtn}</div>` : ''}
     </div>
-    <div class="card"><h2>Filament use</h2>${used.map(([i, g, m]) => `<div class="sl-use">${F.swatch(filColor(i + 1), 'sm')}<span>${i + 1} · ${esc((S.filaments[i] || {}).preset ? S.filaments[i].preset.replace(/ @.*$/, '') : '')}</span><span>${g.toFixed(1)} g${m ? ` · ${m} m` : ''}</span></div>`).join('') || '<p class="muted small">–</p>'}</div>
+    <div class="card"><h2>Filament use</h2>${used.map(([t, g, m]) => { const f = fil[t] || t + 1; return `<div class="sl-use">${F.swatch(filColor(f), 'sm')}<span>${f} · ${esc((S.filaments[f - 1] || {}).preset ? S.filaments[f - 1].preset.replace(/ @.*$/, '') : '')}</span><span>${g.toFixed(1)} g${m ? ` · ${m} m` : ''}</span></div>`; }).join('') || '<p class="muted small">–</p>'}
+      ${mergeNote}</div>
     ${(j.warnings || []).length ? `<div class="card"><h2>Check</h2>${j.warnings.map((w) => `<div class="notice warn small">${esc(w)}</div>`).join('')}</div>` : ''}
     <div class="card"><h2>Show</h2><div class="segmented"><button data-pc="tool" class="${S.previewColor === 'tool' ? 'active' : ''}">Filament</button><button data-pc="feature" class="${S.previewColor === 'feature' ? 'active' : ''}">Line type</button></div></div>
     <div class="sl-go"><div class="row gap"><a class="btn" href="/api/slicer/gcode?${q}&download=1" download title="Save the G-code (for a USB stick or another program)">G-code</a>${j.hasProject ? `<a class="btn" href="/api/slicer/gcode?${q}&download=3mf" download title="Save the sliced project (.gcode.3mf, opens in OrcaSlicer)">3MF</a>` : ''}<button class="btn primary big" style="flex:1" data-sl="print">Print${S.nPlates > 1 ? ` plate ${S.plate + 1}` : ''}…</button></div>
@@ -1247,6 +1413,7 @@ async function onClick(e) {
   if (b.dataset.pc) { S.previewColor = b.dataset.pc; savePrefs(); colorPreview(); renderSide(); return; }
   if (b.dataset.feat !== undefined) { const f = +b.dataset.feat; S.hiddenFeatures.has(f) ? S.hiddenFeatures.delete(f) : S.hiddenFeatures.add(f); colorPreview(); return; }
   if (b.dataset.reset) { delete S.overrides[b.dataset.reset]; changed(); return; }
+  if (b.dataset.filDel !== undefined) { const k = +b.dataset.filDel + 1; if (F.confirmBox) F.confirmBox(`Remove filament ${k}?`, 'Parts painted or set to it go to filament 1.', 'Remove').then((ok) => ok && removeFilament(k)); else removeFilament(k); return; }
   if (b.dataset.objDel) { removeObject(S.objects.find((o) => o.id === +b.dataset.objDel)); return; }
   if (b.dataset.obj && !e.target.closest('select, button')) { if (S.mode === 'prepare') select(S.objects.find((o) => o.id === +b.dataset.obj)); return; }
   const o = S.selected;
@@ -1261,6 +1428,8 @@ async function onClick(e) {
     case 'addplate': addPlate(); break;
     case 'delplate': deletePlate(S.plate); break;
     case 'loaded': useLoaded(); break;
+    case 'addfil': addFilament(); break;
+    case 'remerge': delete S.merge[S.plate]; slice(S.plate); break;
     case 'all': renderAll(); $('#sl-all-dialog').showModal(); break;
     case 'slice': slice(S.plate); break;
     case 'sliceall': sliceAll(); break;
@@ -1375,9 +1544,64 @@ function renderAll() {
 
 // ================================================================== slicing (one plate at a time)
 function hashArr(a) { if (!a) return 0; let h = 0; for (let i = 0; i < a.length; i++) h = (h * 31 + a[i]) | 0; return h; }
+/** Filament number -> how many paint pieces use it, for the models on plate i. */
+/**
+ * A free spot for the prime tower (purge block for colour changes) on plate i: back corners
+ * first, away from the models. Plate coordinates of the tower's front-left corner.
+ */
+function towerSpot(i) {
+  const b = bed(), px = plateX(i);
+  const W = 28 + 2 * 5, D = 60, edge = 6, gap = 12; // tower + brim; depth grows with colour changes: room for ~60 mm
+  const boxes = platesObjects(i).map((o) => { const w = worldBox(o); return { x0: w.min.x - px - gap, y0: w.min.y - gap, x1: w.max.x - px + gap, y1: w.max.y + gap }; });
+  const xs = [b.x0 + edge, b.x0 + b.w - edge - W, b.x0 + (b.w - W) / 2], ys = [b.y0 + b.d - edge - D, b.y0 + edge, b.y0 + (b.d - D) / 2];
+  const spots = [[0, 0], [1, 0], [0, 1], [1, 1], [2, 0], [2, 1], [0, 2], [1, 2]].map(([a, c]) => ({ x: xs[a], y: ys[c] }));
+  const overlap = (p) => boxes.reduce((s, q) => s + Math.max(0, Math.min(p.x + W, q.x1) - Math.max(p.x, q.x0)) * Math.max(0, Math.min(p.y + D, q.y1) - Math.max(p.y, q.y0)), 0);
+  let best = spots[0], bo = Infinity;
+  for (const p of spots) { const v = overlap(p); if (v < bo) { bo = v; best = p; } if (v === 0) break; }
+  return { x: +(best.x + 5).toFixed(1), y: +(best.y + 5).toFixed(1) }; // inside the brim
+}
+/** Project filament number for each tool of plate i's slice (tool t -> fil[t]). */
+function toolFilaments(i) { return (S.res[i] && S.res[i].tools) || S.filaments.map((_, k) => k + 1); }
+function plateUse(i) {
+  const n = new Float64Array(256);
+  for (const o of platesObjects(i)) {
+    const st = o.states;
+    for (let t = 0; t < st.length; t++) n[st[t] || o.filament]++;
+  }
+  const m = new Map();
+  n.forEach((c, f) => { if (c && f) m.set(f, c); });
+  return m;
+}
+/** Plate i uses more filaments than the printer holds: which one prints each extra colour? */
+function askMerge(i, use) {
+  const heads = headCount();
+  const byUse = [...use.keys()].sort((a, b) => use.get(b) - use.get(a));
+  const keep = byUse.slice(0, heads).sort((a, b) => a - b), extra = byUse.slice(heads).sort((a, b) => a - b);
+  const nearest = (f) => keep.reduce((b, k) => (F.colorDiff(S.filaments[k - 1].color, S.filaments[f - 1].color) < F.colorDiff(S.filaments[b - 1].color, S.filaments[f - 1].color) ? k : b), keep[0]);
+  const sw = (f) => `${F.swatch(filColor(f), 'sm')} <b>${f}</b>`;
+  const dlg = document.createElement('dialog');
+  dlg.className = 'dialog';
+  dlg.innerHTML = `<form method="dialog" class="dialog-body"><h2>Plate ${i + 1} uses ${use.size} colours</h2>
+    <p>${esc(S.info.name || 'This printer')} prints ${heads} colour${heads === 1 ? '' : 's'} at a time, so ${extra.length === 1 ? 'one colour has' : `${extra.length} colours have`} to print with another filament on this plate.
+      The ${heads} most used colours keep their filament (${keep.map(sw).join(' ')}).</p>
+    ${extra.map((f) => `<div class="row gap" style="align-items:center;margin:8px 0"><span>Colour ${sw(f)} prints with</span>
+      <select data-merge="${f}">${keep.map((k) => `<option value="${k}" ${k === nearest(f) ? 'selected' : ''}>filament ${k} (${esc(S.filaments[k - 1].color)})</option>`).join('')}</select></div>`).join('')}
+    <p class="small muted">Only this plate's print changes; your painting is kept. To print the colours differently, cancel and repaint or move parts to another plate.</p>
+    <div class="row gap" style="justify-content:flex-end"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="ok">Slice</button></div></form>`;
+  document.body.appendChild(dlg);
+  return new Promise((res) => {
+    dlg.addEventListener('close', () => {
+      const map = {};
+      if (dlg.returnValue === 'ok') dlg.querySelectorAll('[data-merge]').forEach((sel) => { map[+sel.dataset.merge] = +sel.value; });
+      dlg.remove();
+      res(dlg.returnValue === 'ok' ? map : null);
+    });
+    dlg.showModal();
+  });
+}
 function plateKey(i) {
   const px = plateX(i);
-  return JSON.stringify([S.printerId, S.info && S.info.machine, S.process, S.bedType, S.filaments, S.overrides,
+  return JSON.stringify([S.printerId, S.info && S.info.machine, S.process, S.bedType, S.filaments, S.overrides, S.merge[i] || null,
     platesObjects(i).map((o) => { const e = o.mesh.matrix.elements.map((x) => Math.round(x * 1000)); e[12] -= Math.round(px * 1000); return [o.id, o.filament, e, hashArr(o.states), hashArr(o.sup), hashArr(o.seam)]; })]);
 }
 
@@ -1419,10 +1643,24 @@ async function slice(i = S.plate) {
   if (!list.length) { F.toast(`Plate ${i + 1} is empty.`, true); return false; }
   checkBounds();
   if (list.some((o) => o.outside)) { F.toast(`Some models on plate ${i + 1} are off the plate. Move them onto it first.`, true); setPlate(i); location.hash = '#slicer/prepare'; return false; }
-  if (String(valueOf('enable_support')) !== '1' && list.some((o) => o.sup && o.sup.includes(1))) F.toast('You painted supports, but Supports is switched off: they will not be printed (Paint → Supports).', true);
-  const used = new Set(list.flatMap((o) => [o.filament, ...new Set(o.states)]).filter(Boolean));
-  const missing = [...used].filter((n) => n > S.filaments.length);
-  if (missing.length) { F.toast(`Filament ${missing.join(', ')} is used but this printer has only ${S.filaments.length}. Change those parts first.`, true); return false; }
+  const supOn = /^(1|true)$/.test(String(valueOf('enable_support')));
+  if (!supOn && list.some((o) => o.sup && o.sup.includes(1))) F.toast('Painted supports are left out: Supports is switched off (switch it on under Paint → Supports).', true);
+  // Only the filaments this plate uses are sent, as tools 1..n. More than the printer can hold
+  // at once: ask which of the others prints each extra colour (or cancel and repaint).
+  const use = plateUse(i);
+  const U = [...use.keys()].sort((a, b) => a - b);
+  let merge = {};
+  if (U.length > headCount()) {
+    const prev = S.merge[i];
+    if (prev && prev.u === U.join()) merge = prev.map;
+    else {
+      merge = await askMerge(i, use);
+      if (!merge) return false;
+      S.merge[i] = { u: U.join(), map: merge };
+    }
+  } else delete S.merge[i];
+  const toolFils = [...new Set(U.map((f) => merge[f] || f))].sort((a, b) => a - b);
+  const toolOf = new Map(U.map((f) => [f, toolFils.indexOf(merge[f] || f) + 1]));
   if (S.mode !== 'preview') { history.replaceState(null, '', '#slicer/preview'); S.mode = 'preview'; $$('#mode-tabs a').forEach((a) => a.classList.toggle('active', a.dataset.mode === 'preview')); }
   if (S.plate !== i) { S.plate = i; buildBed(); }
   clearPreview();
@@ -1432,12 +1670,16 @@ async function slice(i = S.plate) {
   const key = plateKey(i);
   let blob;
   try {
-    const data = export3mf(list.map((o) => ({ name: o.name, positions: platePositions(o, i), paint: { color: codesOf(o, o.states), supports: codesOf(o, o.sup), seam: codesOf(o, o.seam) }, filament: o.filament })), plateName(i));
+    const data = export3mf(list.map((o) => {
+      const st = new Uint8Array(o.states.length);
+      for (let t = 0; t < st.length; t++) if (o.states[t]) st[t] = toolOf.get(o.states[t]);
+      return { name: o.name, positions: platePositions(o, i), paint: { color: codesOf(o, st), supports: supOn ? codesOf(o, o.sup) : null, seam: codesOf(o, o.seam) }, filament: toolOf.get(o.filament) };
+    }), plateName(i));
     blob = new Blob([data], { type: 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml' });
   } catch (e) { busy(null); F.toast('Could not pack the plate: ' + e.message, true); return false; }
   const overrides = { ...S.overrides };
   if (S.bedType) overrides.curr_bed_type = S.bedType;
-  const opts = { printer: S.printerId, machine: S.info.machine, process: S.process, filaments: S.filaments, overrides, name: plateName(i), thumb: thumbnail(list) };
+  const opts = { printer: S.printerId, machine: S.info.machine, process: S.process, filaments: toolFils.map((f) => S.filaments[f - 1]), overrides, name: plateName(i), thumb: thumbnail(list), tower: toolFils.length > 1 ? towerSpot(i) : null };
   const fd = new FormData();
   fd.append('options', JSON.stringify(opts));
   fd.append('model', blob, 'plate.3mf');
@@ -1450,7 +1692,7 @@ async function slice(i = S.plate) {
     xhr.send(fd);
   });
   if (!r.ok) { busy(null); F.toast(r.message || 'Slicing could not start.', true); renderSide(); return false; }
-  S.res[i] = { job: r.job, key, g: null };
+  S.res[i] = { job: r.job, key, g: null, tools: toolFils };
   renderSide(); renderPlateBar();
   poll(i);
   return true;
@@ -1567,7 +1809,8 @@ function colorPreview() {
   const g = S.previewG;
   if (!g || !segMesh) return;
   const c = new THREE.Color();
-  const tools = S.filaments.map((f) => new THREE.Color(f.color));
+  const fil = toolFilaments(S.plate);
+  const tools = fil.map((f) => new THREE.Color(filColor(f)));
   const feats = FEATURES.map(([, col]) => new THREE.Color(col));
   const hidden = new THREE.Color(0, 0, 0);
   const byTool = S.previewColor === 'tool';
@@ -1591,7 +1834,7 @@ function colorPreview() {
   }
   const used = byTool ? [...new Set(g.tool)].sort((a, b) => a - b) : [...new Set(g.feature)].sort((a, b) => a - b);
   $('#sl-legend').innerHTML = byTool
-    ? used.map((t) => `<div class="li"><i style="background:${esc((S.filaments[t] || {}).color || '#888')}"></i>Filament ${t + 1}</div>`).join('')
+    ? used.map((t) => `<div class="li"><i style="background:${esc(filColor(fil[t] || t + 1))}"></i>Filament ${fil[t] || t + 1}</div>`).join('')
     : used.map((f) => `<button class="li ${S.hiddenFeatures.has(f) ? 'off' : ''}" data-feat="${f}" title="Show / hide"><i style="background:${FEATURES[f][1]}"></i>${FEATURES[f][0]}</button>`).join('');
   invalidate();
 }

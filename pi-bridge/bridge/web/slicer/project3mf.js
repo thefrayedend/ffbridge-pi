@@ -167,9 +167,15 @@ const apply = (m, x, y, z) => [m[0] * x + m[3] * y + m[6] * z + m[9], m[1] * x +
 /**
  * Reads a 3MF (Orca / Bambu / MakerWorld / Prusa / plain). Returns
  * { objects: [{name, positions: Float32Array, paint: [codes per triangle], filament}], plates: [{id, name, objectIds}],
+ *   plateCount, bed: {x0, y0, w, d} of the source printer or null, colours / types of its filaments,
+ *   settings: the project's support / infill / wall / brim settings (PROJECT_KEYS),
  *   skipped: number of modifier / negative / support parts left out }
  * Each object is one build item (parts merged). Part filaments become paint.
  */
+/** Print settings a project brings along (they are about the model, not the printer). */
+export const PROJECT_KEYS = ['enable_support', 'support_type', 'support_style', 'support_on_build_plate_only', 'support_threshold_angle',
+  'sparse_infill_density', 'wall_loops', 'brim_type', 'brim_width', 'top_shell_layers', 'bottom_shell_layers'];
+
 export function import3mf(buffer) {
   let expanded = 0;
   const files = unzipSync(new Uint8Array(buffer), {
@@ -207,6 +213,26 @@ export function import3mf(buffer) {
       plates.push({ id: Number(m.plater_id) || plates.length + 1, name: m.plater_name || '', objectIds: [...new Set(ids)] });
     }
   }
+
+  // The printer the project was made for: its bed (where the plates are) and its filaments.
+  let bed = null, colours = [], types = [];
+  const settings = {};
+  const ps = files['Metadata/project_settings.config'];
+  if (ps) {
+    try {
+      const j = JSON.parse(strFromU8(ps));
+      const pts = (j.printable_area || []).map((p) => String(p).split('x').map(Number)).filter((p) => p.length === 2 && p.every(Number.isFinite));
+      if (pts.length >= 3) {
+        const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+        const x0 = Math.min(...xs), y0 = Math.min(...ys), w = Math.max(...xs) - x0, d = Math.max(...ys) - y0;
+        if (w > 20 && d > 20 && w < 2000 && d < 2000) bed = { x0, y0, w, d };
+      }
+      if (Array.isArray(j.filament_colour)) colours = j.filament_colour.map((c) => (/^#[0-9a-f]{6}/i.test(c) ? c.slice(0, 7).toUpperCase() : '#888888'));
+      if (Array.isArray(j.filament_type)) types = j.filament_type.map(String);
+      for (const k of PROJECT_KEYS) if (j[k] !== undefined) settings[k] = String(Array.isArray(j[k]) ? j[k][0] : j[k]);
+    } catch (_) { /* not JSON (PrusaSlicer ini): plates are guessed */ }
+  }
+  const plateCount = plates.length;
 
   const factor = UNITS[root.documentElement.getAttribute('unit') || 'millimeter'];
   if (!factor) throw new Error('Unsupported 3MF unit');
@@ -270,7 +296,7 @@ export function import3mf(buffer) {
     objects.push({ id: topId, name, positions: new Float32Array(pos), paint: codes, sup: sup.some(Boolean) ? sup : null, seam: seam.some(Boolean) ? seam : null, filament: objFil, parts: partCount });
   }
   if (!objects.length) throw new Error(skipped ? 'This 3MF only has modifier or helper parts, nothing to print.' : 'There is nothing printable in this 3MF.');
-  return { objects, plates: plates.filter((p) => p.objectIds.length), skipped };
+  return { objects, plates: plates.filter((p) => p.objectIds.length), plateCount, bed, colours, types, settings, skipped };
 }
 const det = (m) => m[0] * (m[4] * m[8] - m[7] * m[5]) - m[3] * (m[1] * m[8] - m[7] * m[2]) + m[6] * (m[1] * m[5] - m[4] * m[2]);
 

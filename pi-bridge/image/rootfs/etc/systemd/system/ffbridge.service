@@ -7,6 +7,12 @@ Wants=network-online.target ffai.service
 User=ffbridge
 Group=ffbridge
 WorkingDirectory=/var/lib/ffbridge
+# As root ("+"), failures ignored ("-"): compressed swap in RAM for big slices, and the AI
+# service back on if the bridge stopped in the middle of a slice.
+ExecStartPre=-+/usr/local/sbin/ffbridge-helper zram-setup
+ExecStartPre=-+/usr/local/sbin/ffbridge-helper ai-resume
+# If memory runs out, the slicer (oom_score_adj 1000) goes first, never the bridge.
+OOMScoreAdjust=-500
 ExecStart=/opt/ffbridge/bin/pibridge --data /var/lib/ffbridge --mainsail /opt/ffbridge/mainsail --setup-web /opt/ffbridge/setup-web --setup-port 80 --ai-url http://127.0.0.1:3333 --boot-partition /ffsetup
 # Port 80 for the setup page without running as root.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
