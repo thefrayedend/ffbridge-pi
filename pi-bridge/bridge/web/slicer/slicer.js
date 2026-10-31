@@ -1436,7 +1436,7 @@ function preparePanel() {
         <button data-obj-del="${o.id}" title="Delete">✕</button></div>`).join('')}</div>
         ${sel && sel.plate === S.plate ? `${xfFields(sel)}<label class="field" style="margin-top:8px"><span class="label">Move to</span><select data-obj-plate="${sel.id}">${plateOptions(sel.plate)}</select></label>` : ''}`
         : `<p class="muted small">${S.objects.length ? 'This plate is empty. Drag a model here, or pick one on another plate and use "Move to".' : 'Nothing on the plate yet. Drop STL, OBJ or 3MF files on the 3D view.'}</p>`}
-      <div class="row gap wrap" style="margin-top:8px"><button class="btn small" data-sl="add">Add model</button>${list.length ? '<button class="btn small" data-sl="arrange">Arrange</button><button class="btn small ghost-danger" data-sl="clear">Clear plate</button>' : ''}${S.objects.length ? '<button class="btn small" data-sl="save" title="Download everything (all plates, positions, colours and painting) as a 3MF project you can open here again">Save project</button>' : ''}</div>
+      <div class="row gap wrap" style="margin-top:8px"><button class="btn small" data-sl="add">Add model</button>${list.length ? '<button class="btn small" data-sl="arrange">Arrange</button><button class="btn small ghost-danger" data-sl="clear">Clear plate</button>' : ''}${S.objects.length ? '<button class="btn small" data-sl="save" title="Download everything (all plates, positions, colours and painting) as a 3MF project you can open here again">Save project</button><button class="btn small ghost-danger" data-sl="newproj" title="Start over: removes every model and plate (printer, filament and quality settings stay)">New project</button>' : ''}</div>
     </div>
     ${goButton()}`;
 }
@@ -1585,6 +1585,7 @@ async function onClick(e) {
     case 'loaded': useLoaded(); break;
     case 'addfil': addFilament(); break;
     case 'save': saveProject(); break;
+    case 'newproj': newProject(); break;
     case 'remerge': delete S.merge[S.plate]; slice(S.plate); break;
     case 'all': renderAll(); $('#sl-all-dialog').showModal(); break;
     case 'slice': slice(S.plate); break;
@@ -2008,6 +2009,19 @@ async function sliceAll() {
   queue = Array.from({ length: S.nPlates }, (_, i) => i).filter((i) => platesObjects(i).length && !(S.res[i] && S.res[i].job && S.res[i].job.state === 'done' && S.res[i].key === plateKey(i)));
   if (!queue.length) { F.toast('Every plate is already sliced.'); return; }
   await slice(queue.shift());
+}
+/** Start over: every model, plate, slice and undo step goes; printer, filament and quality settings stay. */
+async function newProject() {
+  if (S.objects.length && !(await F.confirmBox('Start a new project?', `All ${S.objects.length} model(s)${S.nPlates > 1 ? ` on ${S.nPlates} plates` : ''} and their slices are removed. Save the project first if you want to keep it. Printer, filament and quality settings stay.`, 'New project'))) return;
+  if (S.res.some((r) => r && r.job && r.job.state === 'slicing')) await cancelSlice();
+  queue = []; clearTimeout(pollTimer); busy(null);
+  for (const o of S.objects) freeObject(o);
+  S.objects = []; S.selected = null; S.undo = [];
+  S.nPlates = 1; S.plate = 0; S.res = []; S.merge = {};
+  clearPreview();
+  if (S.mode !== 'prepare') location.hash = '#slicer/prepare';
+  else { select(null); checkBounds(); buildBed(); viewHome(); renderPlateBar(); renderTools(); renderSide(); }
+  F.toast('New project: the plate is empty. Add a model to start.');
 }
 async function cancelSlice() {
   queue = [];
