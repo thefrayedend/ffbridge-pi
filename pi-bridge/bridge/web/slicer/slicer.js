@@ -105,7 +105,7 @@ function showSetup(st) {
 // ================================================================== printer + profiles
 const prefKey = (id) => 'ffb-slicer-' + id;
 function savePrefs() {
-  try { localStorage.setItem(prefKey(S.printerId), JSON.stringify({ machine: S.info && S.info.machine, process: S.process, bedType: S.bedType, filaments: S.filaments, overrides: S.overrides, color: S.previewColor })); } catch (_) { /* private mode */ }
+  try { localStorage.setItem(prefKey(S.printerId), JSON.stringify({ machine: S.info && S.info.machine, process: S.process, bedType: S.bedType, filaments: S.filaments, overrides: S.overrides, color: S.previewColor, infill: S.infillFil || 0 })); } catch (_) { /* private mode */ }
 }
 function loadPrefs(id) { try { return JSON.parse(localStorage.getItem(prefKey(id)) || '{}'); } catch (_) { return {}; } }
 
@@ -136,6 +136,7 @@ async function loadPrinterInner(id, extra) {
   S.bedType = prefs.bedType || r.defaultBedType || '';
   S.overrides = prefs.overrides && typeof prefs.overrides === 'object' ? prefs.overrides : {};
   S.previewColor = prefs.color || 'tool';
+  S.infillFil = +prefs.infill || 0;
   S.filaments = defaultFilaments(r, prefs.filaments);
   S.res = [];
   await loadValues();
@@ -200,6 +201,7 @@ function setup3d() {
   camera = new THREE.PerspectiveCamera(40, 1, 1, 8000);
   camera.up.set(0, 0, 1);
   window.__slCam = camera;
+  window.__slTower = (i) => towerSpot(i);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3f47, 1.6));
   const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(-150, -250, 400); scene.add(sun);
   const fill = new THREE.DirectionalLight(0xffffff, 0.6); fill.position.set(300, 200, 150); scene.add(fill);
@@ -1276,6 +1278,7 @@ function removeFilament(k) { // k: 1-based
     for (let i = 0; i < st.length; i++) if (st[i]) st[i] = fix(st[i]);
   }
   S.filaments.splice(k - 1, 1);
+  if (S.infillFil) S.infillFil = S.infillFil === k ? 0 : S.infillFil > k ? S.infillFil - 1 : S.infillFil;
   if (S.paint.filament > S.filaments.length) S.paint.filament = 1;
   S.undo = S.undo.filter((u) => u.type !== 'paint'); // paint undo records use the old numbering
   savePrefs();
@@ -1306,6 +1309,8 @@ function preparePanel() {
     <div class="card"><h2>Quality <button class="btn tiny" data-sl="all">All settings${nChanged ? ` (${nChanged} changed)` : ''}</button></h2>
       <label class="field"><span class="label">Profile</span><select data-set="process">${S.info.processes.map((p) => `<option ${p === S.process ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
       ${SIMPLE.map(([k, l]) => byKey.has(k) ? settingRow(byKey.get(k), l) : '').join('')}
+      <div class="sl-set ${S.infillFil ? 'changed' : ''}"><span class="nm" title="Print the inside of every model with one filament (for example cheap white), also on multi-colour prints. The outside keeps its colours as a skin about 3 mm thick."><span>Infill filament</span></span>
+        <select data-set="infill"><option value="0">Same as the model</option>${S.filaments.map((f, k) => `<option value="${k + 1}" ${S.infillFil === k + 1 ? 'selected' : ''}>Filament ${k + 1}</option>`).join('')}</select></div>
     </div>
     <div class="card"><h2>Plate ${S.plate + 1}${S.nPlates > 1 ? ` <span class="muted small">of ${S.nPlates}</span>` : ''}
         <span class="row gap"><button class="btn tiny" data-sl="addplate" title="Add an empty plate">+ Plate</button>${S.nPlates > 1 ? '<button class="btn tiny ghost-danger" data-sl="delplate" title="Delete this plate">Delete</button>' : ''}</span></h2>
@@ -1422,7 +1427,7 @@ function previewPanel() {
       ${allBtn ? `<div style="margin-top:10px">${allBtn}</div>` : ''}
     </div>
     <div class="card"><h2>Filament use</h2>${used.map(([t, g, m]) => { const f = fil[t] || t + 1; return `<div class="sl-use">${F.swatch(filColor(f), 'sm')}<span>${f} · ${esc((S.filaments[f - 1] || {}).preset ? S.filaments[f - 1].preset.replace(/ @.*$/, '') : '')}</span><span>${g.toFixed(1)} g${m ? ` · ${m} m` : ''}</span></div>`; }).join('') || '<p class="muted small">–</p>'}
-      ${mergeNote}</div>
+      ${mergeNote}${r.infill ? `<p class="small muted" style="margin-top:6px">The inside of the models is printed with filament ${r.infill}; their colours form a skin about 3 mm thick.</p>` : ''}${r.towerWall ? `<p class="small muted" style="margin-top:6px">The prime tower has ${r.towerWall === 'rib' ? 'ribbed' : 'plain'} walls on this plate: the usual cone-shaped one (it widens with the print height) does not fit beside the models.</p>` : ''}${r.noTower ? '<p class="small muted" style="margin-top:6px">No prime tower on this plate: the models leave no room for it. Each colour has its own nozzle, so it prints without one (a colour may leave a small string or blob where it starts).</p>' : ''}</div>
     ${(j.warnings || []).length ? `<div class="card"><h2>Check</h2>${j.warnings.map((w) => `<div class="notice warn small">${esc(w)}</div>`).join('')}</div>` : ''}
     <div class="card"><h2>Show</h2><div class="segmented"><button data-pc="tool" class="${S.previewColor === 'tool' ? 'active' : ''}">Filament</button><button data-pc="feature" class="${S.previewColor === 'feature' ? 'active' : ''}">Line type</button></div></div>
     <div class="sl-go"><div class="row gap"><a class="btn" href="/api/slicer/gcode?${q}&download=1" download title="Save the G-code (for a USB stick or another program)">G-code</a>${j.hasProject ? `<a class="btn" href="/api/slicer/gcode?${q}&download=3mf" download title="Save the sliced project (.gcode.3mf, opens in OrcaSlicer)">3MF</a>` : ''}<button class="btn primary big" style="flex:1" data-sl="print">Print${S.nPlates > 1 ? ` plate ${S.plate + 1}` : ''}…</button></div>
@@ -1509,6 +1514,7 @@ async function onChange(e) {
   if (set === 'model') { await loadPrinter(S.printerId, '&model=' + encodeURIComponent(t.value)); applyMode(); return; }
   if (set === 'machine') { savePrefsMachine(t.value); await loadPrinter(S.printerId); return; }
   if (set === 'bed') { S.bedType = t.value; changed(false); return; }
+  if (set === 'infill') { S.infillFil = +t.value; changed(false); return; }
   if (set === 'process') { S.process = t.value; S.loading = true; renderSide(); await loadValues(); S.loading = false; changed(); return; }
   if (set === 'paintobj') { S.selected = S.objects.find((o) => o.id === +t.value) || null; renderSide(); return; }
   if (t.dataset.pbool) { S.paint[t.dataset.pbool] = t.checked; if (t.dataset.pbool === 'overhang') for (const o of S.objects) recolor(o); renderSide(); return; }
@@ -1576,19 +1582,64 @@ function renderAll() {
 function hashArr(a) { if (!a) return 0; let h = 0; for (let i = 0; i < a.length; i++) h = (h * 31 + a[i]) | 0; return h; }
 /** Filament number -> how many paint pieces use it, for the models on plate i. */
 /**
- * A free spot for the prime tower (purge block for colour changes) on plate i: back corners
- * first, away from the models. Plate coordinates of the tower's front-left corner.
+ * A free spot for the prime tower (purge block for colour changes) on plate i, from the models'
+ * real outline on the bed (not their bounding box: round models leave the corners free).
+ * Corners first, then anywhere; the deepest tower room that fits wins. Plate coordinates of the
+ * tower's front-left corner, inside its brim. free: false when nothing fits.
  */
-function towerSpot(i) {
-  const b = bed(), px = plateX(i);
-  const W = 28 + 2 * 5, D = 60, edge = 6, gap = 12; // tower + brim; depth grows with colour changes: room for ~60 mm
-  const boxes = platesObjects(i).map((o) => { const w = worldBox(o); return { x0: w.min.x - px - gap, y0: w.min.y - gap, x1: w.max.x - px + gap, y1: w.max.y + gap }; });
-  const xs = [b.x0 + edge, b.x0 + b.w - edge - W, b.x0 + (b.w - W) / 2], ys = [b.y0 + b.d - edge - D, b.y0 + edge, b.y0 + (b.d - D) / 2];
-  const spots = [[0, 0], [1, 0], [0, 1], [1, 1], [2, 0], [2, 1], [0, 2], [1, 2]].map(([a, c]) => ({ x: xs[a], y: ys[c] }));
-  const overlap = (p) => boxes.reduce((s, q) => s + Math.max(0, Math.min(p.x + W, q.x1) - Math.max(p.x, q.x0)) * Math.max(0, Math.min(p.y + D, q.y1) - Math.max(p.y, q.y0)), 0);
-  let best = spots[0], bo = Infinity;
-  for (const p of spots) { const v = overlap(p); if (v < bo) { bo = v; best = p; } if (v === 0) break; }
-  return { x: +(best.x + 5).toFixed(1), y: +(best.y + 5).toFixed(1), free: bo === 0 }; // inside the brim
+function towerSpot(i, tools = 2) {
+  const b = bed(), px = plateX(i), G = 2;
+  const nx = Math.ceil(b.w / G), ny = Math.ceil(b.d / G);
+  const occ = new Uint8Array(nx * ny);
+  const v = new THREE.Vector3();
+  for (const o of platesObjects(i)) {
+    const pos = o.mesh.geometry.attributes.position.array, m = o.mesh.matrixWorld;
+    for (let t = 0; t < pos.length; t += 9) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let k = 0; k < 9; k += 3) {
+        v.set(pos[t + k], pos[t + k + 1], pos[t + k + 2]).applyMatrix4(m);
+        const x = v.x - px - b.x0, y = v.y - b.y0;
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+      const i0 = Math.max(0, Math.floor(x0 / G)), i1 = Math.min(nx - 1, Math.floor(x1 / G));
+      const j0 = Math.max(0, Math.floor(y0 / G)), j1 = Math.min(ny - 1, Math.floor(y1 / G));
+      for (let j = j0; j <= j1; j++) occ.fill(1, j * nx + i0, j * nx + i1 + 1);
+    }
+  }
+  // How much room the tower takes (measured with the engine): its core is prime_tower_width wide and
+  // grows ~10 mm deeper per extra colour; around it a 5 mm brim plus, depending on its walls, a cone
+  // that widens with the print height (height x tan(apex / 2) on every side), ~10 mm ribs, or nothing.
+  // Flashforge's profiles use the cone; when that does not fit, ribs, then plain walls are tried.
+  let H = 0;
+  for (const o of platesObjects(i)) H = Math.max(H, worldBox(o).max.z);
+  const num = (k, d) => { const n = parseFloat(valueOf(k)); return Number.isFinite(n) ? n : d; };
+  const width = num('prime_tower_width', 28), brim = num('prime_tower_brim_width', 5);
+  const core = Math.min(45, 5 + 10 * Math.max(1, tools - 1));
+  const current = String(valueOf('wipe_tower_wall_type') || 'cone');
+  const walls = { cone: H * Math.tan((num('wipe_tower_cone_angle', 12) / 2) * Math.PI / 180), rib: num('wipe_tower_extra_rib_length', 10), rectangle: 0 };
+  const order = [current, ...['cone', 'rib', 'rectangle'].filter((w) => w !== current)];
+  const edge = 2, gap = 4;
+  for (const wall of order) {
+    const pad = brim + (walls[wall] || 0);
+    const W = width + 2 * pad, D = core + 2 * pad;
+    if (W > b.w - 2 * edge || D > b.d - 2 * edge) continue;
+    const freeAt = (x, y) => {
+      const i0 = Math.max(0, Math.floor((x - gap) / G)), i1 = Math.min(nx - 1, Math.floor((x + W + gap) / G));
+      const j0 = Math.max(0, Math.floor((y - gap) / G)), j1 = Math.min(ny - 1, Math.floor((y + D + gap) / G));
+      for (let j = j0; j <= j1; j++) for (let k = i0; k <= i1; k++) if (occ[j * nx + k]) return false;
+      return true;
+    };
+    const spots = [];
+    for (let x = edge; x <= b.w - edge - W; x += G) for (let y = edge; y <= b.d - edge - D; y += G) {
+      const dc = Math.min(Math.hypot(x - edge, y - edge), Math.hypot(b.w - edge - W - x, y - edge), Math.hypot(x - edge, b.d - edge - D - y), Math.hypot(b.w - edge - W - x, b.d - edge - D - y));
+      spots.push([dc, x, y]);
+    }
+    spots.sort((p, q) => p[0] - q[0]); // corners first
+    for (const [, x, y] of spots) {
+      if (freeAt(x, y)) return { x: +(b.x0 + x + pad).toFixed(1), y: +(b.y0 + y + pad).toFixed(1), free: true, wall: wall === current ? null : wall };
+    }
+  }
+  return { x: 0, y: 0, free: false, wall: null };
 }
 /** Project filament number for each tool of plate i's slice (tool t -> fil[t]). */
 function toolFilaments(i) { return (S.res[i] && S.res[i].tools) || S.filaments.map((_, k) => k + 1); }
@@ -1631,7 +1682,7 @@ function askMerge(i, use) {
 }
 function plateKey(i) {
   const px = plateX(i);
-  return JSON.stringify([S.printerId, S.info && S.info.machine, S.process, S.bedType, S.filaments, S.overrides, S.merge[i] || null,
+  return JSON.stringify([S.printerId, S.info && S.info.machine, S.process, S.bedType, S.filaments, S.overrides, S.merge[i] || null, S.infillFil || 0,
     platesObjects(i).map((o) => { const e = o.mesh.matrix.elements.map((x) => Math.round(x * 1000)); e[12] -= Math.round(px * 1000); return [o.id, o.filament, e, hashArr(o.states), hashArr(o.sup), hashArr(o.seam)]; })]);
 }
 
@@ -1678,6 +1729,9 @@ async function slice(i = S.plate) {
   // Only the filaments this plate uses are sent, as tools 1..n. More than the printer can hold
   // at once: ask which of the others prints each extra colour (or cancel and repaint).
   const use = plateUse(i);
+  // Infill filament: the inside of every model in one filament (also for multi-colour prints).
+  const infill = S.infillFil > 0 && S.infillFil <= S.filaments.length ? S.infillFil : 0;
+  if (infill) use.set(infill, Infinity); // never merged away
   const U = [...use.keys()].sort((a, b) => a - b);
   let merge = {};
   if (U.length > headCount()) {
@@ -1702,20 +1756,29 @@ async function slice(i = S.plate) {
   try {
     const data = export3mf(list.map((o) => {
       const st = new Uint8Array(o.states.length);
-      for (let t = 0; t < st.length; t++) if (o.states[t]) st[t] = toolOf.get(o.states[t]);
+      // with an infill filament every surface is painted with its own colour: the engine then keeps
+      // the colours as a skin and only the inside follows the infill filament (unpainted surfaces
+      // would otherwise turn into the infill colour too).
+      for (let t = 0; t < st.length; t++) st[t] = o.states[t] ? toolOf.get(o.states[t]) : (infill ? toolOf.get(o.filament) : 0);
       return { name: o.name, positions: platePositions(o, i), paint: { color: codesOf(o, st), supports: supOn ? codesOf(o, o.sup) : null, seam: codesOf(o, o.seam) }, filament: toolOf.get(o.filament) };
     }), plateName(i));
     blob = new Blob([data], { type: 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml' });
   } catch (e) { busy(null); F.toast('Could not pack the plate: ' + e.message, true); return false; }
   const overrides = { ...S.overrides };
   if (S.bedType) overrides.curr_bed_type = S.bedType;
-  let tower = toolFils.length > 1 ? towerSpot(i) : null;
+  if (infill) {
+    overrides.sparse_infill_filament_id = String(toolOf.get(infill));
+    if (overrides.mmu_segmented_region_max_width === undefined) overrides.mmu_segmented_region_max_width = '3';
+  }
+  const towerOn = !/^(0|false)$/.test(String(valueOf('enable_prime_tower')));
+  let tower = toolFils.length > 1 && towerOn ? towerSpot(i, toolFils.length) : null, noTower = false, towerWall = null;
   // No free spot for the prime tower (the models fill the plate): a printer with a nozzle per
   // colour (Creator 5) prints fine without one; a single nozzle needs it, so it is kept.
   if (tower && !tower.free && (S.info.extruders || 1) > 1 && overrides.enable_prime_tower === undefined) {
-    overrides.enable_prime_tower = '0'; tower = null;
+    overrides.enable_prime_tower = '0'; tower = null; noTower = true;
     F.toast(`No room for the prime tower on plate ${i + 1}: printing without it (each colour has its own nozzle).`);
   }
+  if (tower && tower.free && tower.wall && overrides.wipe_tower_wall_type === undefined) { overrides.wipe_tower_wall_type = tower.wall; towerWall = tower.wall; }
   if (tower) tower = { x: tower.x, y: tower.y };
   const opts = { printer: S.printerId, machine: S.info.machine, process: S.process, filaments: toolFils.map((f) => S.filaments[f - 1]), overrides, name: plateName(i), thumb: thumbnail(list), tower };
   const fd = new FormData();
@@ -1730,7 +1793,7 @@ async function slice(i = S.plate) {
     xhr.send(fd);
   });
   if (!r.ok) { busy(null); F.toast(r.message || 'Slicing could not start.', true); renderSide(); return false; }
-  S.res[i] = { job: r.job, key, g: null, tools: toolFils };
+  S.res[i] = { job: r.job, key, g: null, tools: toolFils, noTower, towerWall, infill };
   renderSide(); renderPlateBar();
   poll(i);
   return true;

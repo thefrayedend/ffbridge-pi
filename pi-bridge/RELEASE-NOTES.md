@@ -30,6 +30,8 @@ setup page, Spoolman, Discord, and AI print-failure detection (Obico model, runs
 - **Drag models** with the mouse or a finger, also onto other plates; dragging past the last plate makes a new one. The add-plate button is now labelled **+ Plate**.
 - **More colours than heads:** up to 16 filaments per project. Each plate is sliced with only the colours it uses, so plates can use different spools. A plate with more colours than the printer holds asks which filament prints each extra colour (or cancel and repaint).
 - Slicing no longer stops on painted supports when Supports is off (they are left out, with a note), and the prime tower is placed in a free spot on the plate instead of hanging off the back.
+- **Infill filament**, also for multi-colour prints (stock OrcaSlicer can't): the inside of the models in one filament (e.g. white), the colours stay on the outside as a ~3 mm skin.
+- **Prime tower fits better:** placed by the models' real outline; when the usual cone-shaped tower (it widens with the print height) has no room, a ribbed or plain one is used.
 - **Very detailed models open:** models with millions of triangles (scans, sculpts) are simplified to about 1 million when opened, keeping the shape within 0.05 mm and the painting exactly. When the models fill the plate, a Creator 5 prints without the prime tower.
 - **Slicing on the board is lighter and safer:**
   - The AI failure detection pauses while the slicer works (it holds up to 1.5 GB of memory) and starts again by itself shortly after. Prints are not watched during that time.
