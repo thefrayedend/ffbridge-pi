@@ -30,6 +30,23 @@ class Slicer {
 
   Slicer(this.host, this.pi, String dataDir, {this.engineOverride, this.repo = ''}) : dir = '$dataDir/slicer' {
     _loadModels();
+    _cleanJobs();
+  }
+
+  /// Results of earlier runs (the browser forgets them on reload / restart anyway): a few plates of
+  /// G-code are hundreds of MB on the SD card.
+  void _cleanJobs() {
+    try {
+      final d = Directory(dir);
+      if (!d.existsSync()) return;
+      for (final e in d.listSync()) {
+        if (e is Directory && RegExp(r'/job-\d+$').hasMatch(e.path)) e.deleteSync(recursive: true);
+      }
+      final tmp = Directory('$dir/tmp');
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    } catch (e) {
+      host.log.warn('Could not clean old slicer jobs: $e');
+    }
   }
 
   String get engineDir => engineOverride ?? '$dir/engine';
@@ -154,18 +171,26 @@ class Slicer {
   final Map<String, Object?> _mem = {};
   File _cacheFile(String key) => File('$dir/cache/${engineVersion.isEmpty ? 'x' : engineVersion}/${key.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_')}.json');
 
-  Future<dynamic> _cached(String key, Future<dynamic> Function() make) async {
-    if (_mem.containsKey(key)) return _mem[key];
-    final f = _cacheFile(key);
-    if (f.existsSync()) {
+  final _inflight = <String, Future<dynamic>>{};
+  Future<dynamic> _cached(String key, Future<dynamic> Function() make) {
+    if (_mem.containsKey(key)) return Future.value(_mem[key]);
+    // the same engine run asked for twice at once (two browser tabs, a reload): one run, shared
+    return _inflight[key] ??= () async {
       try {
-        return _mem[key] = jsonDecode(f.readAsStringSync());
-      } catch (_) {}
-    }
-    final v = await make();
-    f.parent.createSync(recursive: true);
-    f.writeAsStringSync(jsonEncode(v));
-    return _mem[key] = v;
+        final f = _cacheFile(key);
+        if (f.existsSync()) {
+          try {
+            return _mem[key] = jsonDecode(f.readAsStringSync());
+          } catch (_) {}
+        }
+        final v = await make();
+        f.parent.createSync(recursive: true);
+        f.writeAsStringSync(jsonEncode(v));
+        return _mem[key] = v;
+      } finally {
+        _inflight.remove(key);
+      }
+    }();
   }
 
   void _clearCaches() {
@@ -241,9 +266,9 @@ class Slicer {
 
   /// Settings a print may change: plain numbers, switches and choices. Never text settings (that
   /// is where post-processing scripts, custom G-code and file names live).
-  Future<Set<String>> _settingKeys() async => {
+  Future<Map<String, Map<String, dynamic>>> _settingKeys() async => {
         for (final s in await schema())
-          if (overridable(Map<String, dynamic>.from(s as Map))) '${s['key']}'
+          if (overridable(Map<String, dynamic>.from(s as Map))) '${s['key']}': Map<String, dynamic>.from(s)
       };
 
   // ------------------------------------------------------------------ printer -> engine printer
@@ -449,9 +474,26 @@ class Slicer {
 
   Future<Map<String, dynamic>> startSlice(HttpRequest req) async {
     if (!installed) return {'ok': false, 'message': 'The slicer engine is not installed (Settings → General → Slicer).'};
-    if (running != null) return {'ok': false, 'message': 'A slice is already running.'};
+    if (running != null || _starting) return {'ok': false, 'message': 'A slice is already running.'};
     final boundary = req.headers.contentType?.parameters['boundary'];
     if (boundary == null) return {'ok': false, 'message': 'Expected the plate as a file upload.'};
+    final size = req.contentLength;
+    if (size > 1500 * 1024 * 1024) return {'ok': false, 'message': 'This plate is too big to send to the board (over 1.5 GB).'};
+    final free = await _freeBytes(dir);
+    // the plate itself, the engine's output (G-code + project), and room left for the system
+    if (free != null && free < (size > 0 ? size : 0) * 2 + 400 * 1024 * 1024) {
+      return {'ok': false, 'message': 'Not enough free space on the SD card to slice (${(free / 1e6).round()} MB free). Delete old files on the Files page or use a bigger card.'};
+    }
+    _starting = true;
+    try {
+      return await _startSlice(req, boundary);
+    } finally {
+      _starting = false;
+    }
+  }
+
+  bool _starting = false;
+  Future<Map<String, dynamic>> _startSlice(HttpRequest req, String boundary) async {
     final plate = plateOf(req.uri.queryParameters['plate']);
     final jd = Directory('$dir/job-$plate');
     if (jd.existsSync()) jd.deleteSync(recursive: true);
@@ -510,8 +552,9 @@ class Slicer {
     for (final e in over.entries) {
       final k = '${e.key}';
       final v = '${e.value}';
-      if (!keys.contains(k)) throw SlicerException('Unknown setting "$k".');
-      if (v.contains('\n') || v.length > 4000) throw SlicerException('Setting "$k" has a value that is not allowed.');
+      final sc = keys[k];
+      if (sc == null) throw SlicerException('Unknown setting "$k".');
+      if (!validValue(sc, v)) throw SlicerException('Setting "${sc['label'] ?? k}" has a value that is not allowed ($v).');
       args.add('--${k.replaceAll('_', '-')}=$v');
     }
     // Prime tower (several filaments): the browser picks a free spot away from the models; the
@@ -810,6 +853,30 @@ String? matchModel(String printerModel, List<String> engineModels) {
 }
 
 const _safeTypes = {'float', 'int', 'bool', 'enum', 'percent', 'float_or_percent'};
+/// A value the browser sends for a setting matches the setting's type (numbers, on/off, a listed
+/// choice, a percentage); anything else is refused before it reaches the engine.
+bool validValue(Map<String, dynamic> s, String v) {
+  if (v.length > 64 || v.contains('\n')) return false;
+  final num_ = RegExp(r'^-?\d+(\.\d+)?([eE]-?\d+)?$');
+  switch ('${s['type']}') {
+    case 'bool':
+      return const {'0', '1', 'true', 'false'}.contains(v);
+    case 'int':
+      return RegExp(r'^-?\d+$').hasMatch(v);
+    case 'float':
+      return num_.hasMatch(v);
+    case 'percent':
+      return num_.hasMatch(v.endsWith('%') ? v.substring(0, v.length - 1) : v);
+    case 'float_or_percent':
+      return num_.hasMatch(v.endsWith('%') ? v.substring(0, v.length - 1) : v);
+    case 'enum':
+      final e = s['enum'];
+      return e is List && e.any((x) => x is Map && '${x['value']}' == v);
+    default:
+      return false;
+  }
+}
+
 bool overridable(Map<String, dynamic> s) {
   final k = '${s['key']}';
   return _safeTypes.contains(s['type']) && s['vector'] != true && !k.contains('gcode') && !k.contains('post_process') && !k.contains('filename');

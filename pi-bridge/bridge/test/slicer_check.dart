@@ -22,6 +22,11 @@ Future<void> main() async {
   check('A733: both fast cores + one small core', pickCpus(a733, 3).join(',') == '0,6,7', pickCpus(a733, 3));
   check('4 equal cores: first 3', pickCpus({0: 1024, 1: 1024, 2: 1024, 3: 1024}, 3).join(',') == '0,1,2');
   check('2 cores: both', pickCpus({0: 1024, 1: 1024}, 3).join(',') == '0,1');
+  check('value: int ok', validValue({'type': 'int'}, '3') && !validValue({'type': 'int'}, '3.5'));
+  check('value: percent ok', validValue({'type': 'percent'}, '7%') && validValue({'type': 'percent'}, '15') && !validValue({'type': 'percent'}, 'abc'));
+  check('value: enum listed only', validValue({'type': 'enum', 'enum': [{'value': 'tree(auto)'}]}, 'tree(auto)') && !validValue({'type': 'enum', 'enum': [{'value': 'tree(auto)'}]}, 'x'));
+  check('value: bool', validValue({'type': 'bool'}, '1') && !validValue({'type': 'bool'}, 'yes'));
+  check('value: no injection', !validValue({'type': 'float'}, '1 --post-process=x'));
   check('Creator 5 Pro', matchModel('Creator 5 Pro', models) == 'Flashforge Creator 5 Pro');
   check('Creator 5 is not taken for the Pro', matchModel('Creator 5', models) == 'Flashforge Creator 5');
   check('Adventurer 5M Pro', matchModel('Adventurer 5M Pro', models) == 'Flashforge Adventurer 5M Pro');

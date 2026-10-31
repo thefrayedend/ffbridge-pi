@@ -116,7 +116,8 @@ export function parseGcode(text, { onProgress } = {}) {
     maxZ = Math.max(maxZ, seg[o + 4]);
   }
   return {
-    count, seg: seg.subarray(0, count * 7), tool: tool.subarray(0, count), feature: feat.subarray(0, count),
+    // slice, not subarray: the grown buffers can be nearly twice the size that is used
+    count, seg: seg.slice(0, count * 7), tool: tool.slice(0, count), feature: feat.slice(0, count),
     layerEnd: Uint32Array.from(layerEnd), layerZ: Float32Array.from(layerZ), bounds: { minX, minY, maxX, maxY, maxZ },
   };
 }

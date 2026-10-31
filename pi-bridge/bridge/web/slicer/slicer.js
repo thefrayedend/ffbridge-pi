@@ -15,6 +15,35 @@ import { import3mf, export3mf, subdivide, pieceCentres, decodeTree, stateAt, enc
 import { parseGcode, FEATURES } from './gcode.js';
 import * as P from './paint.js';
 
+// ------------------------------------------------------------------ background worker
+// Reading a 3MF and simplifying run in work.js so the page does not freeze; when a worker cannot
+// be made (old browser, file:// page) the same functions run here.
+let worker = null, workerBroken = false, workerProven = false, jobSeq = 0;
+const jobs = new Map();
+function inWorker(op, data, transfer, fallback) {
+  if (workerBroken || typeof Worker === 'undefined') return fallback();
+  try {
+    if (!worker) {
+      worker = new Worker(new URL('./work.js', import.meta.url), { type: 'module' });
+      worker.onmessage = (e) => { workerProven = true; const j = jobs.get(e.data.id); if (!j) return; jobs.delete(e.data.id); e.data.ok ? j.res(e.data.result) : j.rej(new Error(e.data.error)); };
+      worker.onerror = (e) => { // the worker itself failed to load: do the work here from now on
+        workerBroken = true; worker = null;
+        for (const j of jobs.values()) j.rej(new Error('worker: ' + (e.message || 'failed')));
+        jobs.clear();
+        console.warn('slicer worker unavailable, working on the main thread', e);
+      };
+    }
+    const id = ++jobSeq;
+    // big buffers are handed over (not copied) once the worker has answered once: a worker that
+    // fails to load would otherwise take the only copy with it
+    return new Promise((res, rej) => { jobs.set(id, { res, rej }); worker.postMessage({ id, op, data }, workerProven ? transfer : []); })
+      .catch((e) => (workerBroken ? fallback() : Promise.reject(e)));
+  } catch (e) {
+    workerBroken = true;
+    return fallback();
+  }
+}
+
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
@@ -138,7 +167,8 @@ async function loadPrinterInner(id, extra) {
   S.previewColor = prefs.color || 'tool';
   S.infillFil = +prefs.infill || 0;
   S.filaments = defaultFilaments(r, prefs.filaments);
-  S.res = [];
+  S.res = []; S.merge = {}; // another printer: earlier slices and colour choices do not apply
+  if (S.ready) clearPreview();
   await loadValues();
   buildBed();
   for (const o of S.objects) recolor(o);
@@ -356,7 +386,7 @@ async function deletePlate(i) {
   const objs = platesObjects(i);
   if (S.nPlates === 1) { F.toast('There is always at least one plate.', true); return; }
   if (objs.length && !(await F.confirmBox(`Delete plate ${i + 1}?`, `Its ${objs.length} object(s) are removed too.`, 'Delete plate'))) return;
-  for (const o of objs) objGroup.remove(o.mesh);
+  for (const o of objs) freeObject(o);
   S.objects = S.objects.filter((o) => !objs.includes(o));
   // plates after it move one place to the left
   for (const o of S.objects) if (o.plate > i) { o.mesh.position.x -= stride(); o.mesh.updateMatrixWorld(true); }
@@ -442,6 +472,7 @@ const totalTris = () => S.objects.reduce((n, o) => n + o.states.length, 0);
 
 /** Colours of one object: filaments, or (while painting supports / seams) enforcers and blockers. */
 function recolor(o, from = 0, to = o.states.length) {
+  o.rev = (o.rev || 0) + 1; // paint changed: the cached paint hashes (plateKey) are stale
   const col = o.mesh.geometry.attributes.color;
   const arr = col.array;
   const cache = new Map();
@@ -474,7 +505,26 @@ function overhangSet(o) {
   return set;
 }
 
-function worldBox(o) { o.mesh.updateMatrixWorld(true); return new THREE.Box3().setFromObject(o.mesh, true); }
+/**
+ * Exact world bounding box of an object. Walking every vertex of a million-piece mesh on each
+ * mouse move is too slow, so the box is cached: when only the position changed since the last
+ * call (dragging, arranging), the cached box is just shifted.
+ */
+function worldBox(o) {
+  o.mesh.updateMatrixWorld(true);
+  const e = o.mesh.matrixWorld.elements, c = o.bbCache;
+  if (c && c.geo === o.mesh.geometry) {
+    let same = true;
+    for (let k = 0; k < 12 && same; k++) if (c.e[k] !== e[k]) same = false;
+    if (same) {
+      const dx = e[12] - c.e[12], dy = e[13] - c.e[13], dz = e[14] - c.e[14];
+      return new THREE.Box3(c.box.min.clone().add(new THREE.Vector3(dx, dy, dz)), c.box.max.clone().add(new THREE.Vector3(dx, dy, dz)));
+    }
+  }
+  const box = new THREE.Box3().setFromObject(o.mesh, true);
+  o.bbCache = { e: e.slice(), box: box.clone(), geo: o.mesh.geometry };
+  return box;
+}
 function dropToBed(o) {
   const b = worldBox(o);
   o.mesh.position.z -= b.min.z;
@@ -511,6 +561,12 @@ function select(o) {
   renderSide();
 }
 
+/** Takes a model out of the scene for good (its GPU buffers too). Not for undoable removes. */
+function freeObject(o) {
+  objGroup.remove(o.mesh);
+  o.mesh.geometry.dispose();
+  o.mesh.material.dispose();
+}
 function removeObject(o) {
   if (!o) return;
   pushUndo({ type: 'remove', obj: o });
@@ -518,6 +574,43 @@ function removeObject(o) {
   S.objects = S.objects.filter((x) => x !== o);
   if (S.selected === o) select(null);
   checkBounds(); renderSide();
+}
+/**
+ * Mirrors a model left-right (in its own X). The mesh is rebuilt so it stays right-side out and
+ * the painting stays on the same places: every triangle's corner order is swapped, which also
+ * swaps the order of its pieces (children 1 and 2 at every level of the subdivision).
+ */
+function mirrorObject(o) {
+  if (!o) return;
+  const g = o.mesh.geometry, fine = g.attributes.position.array, n = o.states.length;
+  const perm = new Uint32Array(n); // new piece index -> old piece index
+  for (let t = 0; t < o.levels.length; t++) {
+    const lvl = o.levels[t], st = o.start[t], cnt = 4 ** lvl;
+    for (let k = 0; k < cnt; k++) {
+      let m = 0, kk = k; // swap base-4 digits 1 <-> 2
+      for (let d = 0, w = 1; d < lvl; d++, w *= 4) { const dig = kk % 4; kk = (kk - dig) / 4; m += (dig === 1 ? 2 : dig === 2 ? 1 : dig) * w; }
+      perm[st + k] = st + m;
+    }
+  }
+  const nf = new Float32Array(fine.length), nc = new Float32Array(fine.length);
+  const remap = (arr) => { if (!arr) return arr; const out = new Uint8Array(n); for (let k = 0; k < n; k++) out[k] = arr[perm[k]]; return out; };
+  for (let k = 0; k < n; k++) {
+    const src = perm[k] * 9, dst = k * 9;
+    // corners a, c, b (winding swapped) with x negated
+    const order = [0, 6, 3];
+    for (let j = 0; j < 3; j++) { nf[dst + j * 3] = -fine[src + order[j]]; nf[dst + j * 3 + 1] = fine[src + order[j] + 1]; nf[dst + j * 3 + 2] = fine[src + order[j] + 2]; }
+  }
+  for (let i = 0; i < o.orig.length; i += 9) {
+    const a = i, b = i + 3, c = i + 6, out = [a, c, b];
+    for (let j = 0; j < 3; j++) { nc[i + j * 3] = -o.orig[out[j]]; nc[i + j * 3 + 1] = o.orig[out[j] + 1]; nc[i + j * 3 + 2] = o.orig[out[j] + 2]; }
+  }
+  pushUndo({ type: 'mirror', obj: o });
+  o.orig = nc;
+  o.states = remap(o.states); o.sup = remap(o.sup); o.seam = remap(o.seam);
+  g.attributes.position.array.set(nf); g.attributes.position.needsUpdate = true;
+  g.disposeBoundsTree(); g.computeVertexNormals(); g.computeBoundsTree();
+  o.geo = o.adj = o.wz = o.wnz = null; o.bbCache = null; // the paint helpers' caches
+  recolor(o); dropToBed(o); checkBounds(); renderSide();
 }
 function duplicate(o) {
   if (!o) return;
@@ -678,7 +771,8 @@ async function lighter(name, positions, paint = null) {
   if (n <= SIMPLIFY_AT) return positions;
   busy(`Simplifying ${name}…`, `${(n / 1e6).toFixed(1)} million triangles is far more detail than the nozzle can print`, null);
   await new Promise((r) => setTimeout(r, 30));
-  const r = await simplifyModel(positions, paint || {});
+  const pos = positions;
+  const r = await inWorker('simplify', { positions: pos, paint: paint || {} }, [pos.buffer], () => { if (!pos.byteLength) throw new Error('simplifying was interrupted (the browser may have run out of memory) - try again'); return simplifyModel(pos, paint || {}); });
   if (paint) { paint.color = r.color; paint.supports = r.supports; paint.seam = r.seam; }
   F.toast(`${name}: simplified from ${(r.before / 1e6).toFixed(1)} to ${(r.after / 1e6).toFixed(1)} million triangles (shape within ${Math.max(0.01, r.error).toFixed(2)} mm, painting kept) so the board can slice it.`);
   return r.positions;
@@ -713,7 +807,7 @@ function placeNew(o) {
  * any plate in the project get their own plate. Its filaments join the project's filament list.
  */
 async function add3mf(buf, base) {
-  const r = import3mf(buf);
+  const r = await inWorker('import', { buffer: buf }, [buf], () => { if (!buf.byteLength) throw new Error('opening was interrupted (the browser may have run out of memory) - try again'); return import3mf(buf); });
   const byId = new Map(r.objects.map((o) => [o.id, o]));
   const groups = r.plates.map((p) => ({ id: p.id, list: p.objectIds.map((id) => byId.get(id)).filter(Boolean) }));
   const assigned = new Set(groups.flatMap((g) => g.list));
@@ -823,7 +917,7 @@ function takeFilaments(r, fresh) {
   if (!cols.length) return (f) => Math.min(Math.max(1, f || 1), MAX_FILAMENTS); // list grows to fit after placing
   if (fresh) S.filaments = [];
   const map = cols.map((c, k) => {
-    const preset = pickPreset(r.types[k] || 'PLA');
+    const preset = S.info.filaments.includes(r.presets && r.presets[k]) ? r.presets[k] : pickPreset(r.types[k] || 'PLA');
     let n = S.filaments.findIndex((f) => f.color.toUpperCase() === c && F.family(f.preset) === F.family(preset));
     if (n < 0 && S.filaments.length < MAX_FILAMENTS) { S.filaments.push({ color: c, preset }); n = S.filaments.length - 1; }
     if (n < 0) n = nearestFilament(c);
@@ -1097,13 +1191,20 @@ function paintWhole(o, ch, fn, filament) {
 }
 
 // ================================================================== undo
-function pushUndo(u) { S.undo.push(u); if (S.undo.length > 60) S.undo.shift(); }
+function pushUndo(u) {
+  S.undo.push(u);
+  if (S.undo.length > 60) {
+    const old = S.undo.shift();
+    if (old.type === 'remove' && !S.objects.includes(old.obj)) { old.obj.mesh.geometry.dispose(); old.obj.mesh.material.dispose(); }
+  }
+}
 function undo() {
   const u = S.undo.pop();
   if (!u) return;
   const restore = (obj, m) => { obj.mesh.matrix.copy(m); obj.mesh.matrix.decompose(obj.mesh.position, obj.mesh.quaternion, obj.mesh.scale); obj.mesh.updateMatrixWorld(true); };
   if (u.type === 'xf') restore(u.obj, u.m);
   if (u.type === 'many') for (const it of u.list) restore(it.obj, it.m);
+  if (u.type === 'mirror') { const keep = S.undo; S.undo = []; mirrorObject(u.obj); S.undo = keep; return; }
   if (u.type === 'paint') { const arr = P.channel(u.obj, u.ch || 'color', true); for (const [t, v] of u.changed) arr[t] = v; if (u.filament) u.obj.filament = u.filament; recolor(u.obj); }
   if (u.type === 'remove') { objGroup.add(u.obj.mesh); S.objects.push(u.obj); }
   checkBounds(); buildBed(); renderSide(); invalidate();
@@ -1129,6 +1230,16 @@ function onKey(e) {
     if (t) { S.paint.tool = t; renderSide(); }
     return;
   }
+  if (S.mode === 'prepare' && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicate(S.selected); return; }
+  if (S.mode === 'prepare' && e.key.toLowerCase() === 'x' && S.selected) { mirrorObject(S.selected); return; }
+  if (S.mode === 'prepare' && S.selected && /^Arrow(Left|Right|Up|Down)$/.test(e.key)) { // nudge 1 mm, Shift: 10 mm
+    e.preventDefault();
+    const d = e.shiftKey ? 10 : 1, o = S.selected;
+    pushUndo({ type: 'xf', obj: o, m: o.mesh.matrix.clone() });
+    o.mesh.position.x += e.key === 'ArrowRight' ? d : e.key === 'ArrowLeft' ? -d : 0;
+    o.mesh.position.y += e.key === 'ArrowUp' ? d : e.key === 'ArrowDown' ? -d : 0;
+    o.mesh.updateMatrixWorld(true); checkBounds(); if (o.plate !== S.plate) setPlate(o.plate, false); renderXf(); return;
+  }
   const keys = { m: 'move', r: 'rotate', s: 'scale', f: 'face' };
   if (S.mode === 'prepare' && keys[e.key.toLowerCase()]) setTool(keys[e.key.toLowerCase()]);
 }
@@ -1141,6 +1252,7 @@ function setTool(t) {
 // ================================================================== mode + tool bar
 const ICON = {
   add: '<path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/>',
+  mirror: '<path d="M11 2h2v20h-2zM3 18l6-6-6-6v12zm18 0V6l-6 6 6 6z"/>',
   move: '<path d="M10 9h4V6h3l-5-5-5 5h3v3zm-1 1H6V7l-5 5 5 5v-3h3v-4zm14 2-5-5v3h-3v4h3v3l5-5zm-9 3h-4v3H7l5 5 5-5h-3v-3z"/>',
   rotate: '<path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/>',
   scale: '<path d="M21 3h-7l2.6 2.6L12 10.2 13.8 12l4.6-4.6L21 10V3zM3 21h7l-2.6-2.6 4.6-4.6L10.2 12l-4.6 4.6L3 14v7z"/>',
@@ -1168,7 +1280,8 @@ function renderTools() {
       <div class="grp">${[['move', 'Move (M)'], ['rotate', 'Rotate (R)'], ['scale', 'Scale (S)'], ['face', 'Lay on face (F): click the side that should be on the plate']].map(([k, tt]) => `<button data-tool="${k}" class="${S.tool === k ? 'active' : ''}" title="${tt}">${ic(k)}</button>`).join('')}</div>
       <div class="grp"><button data-sl="orient" title="Auto-orient: biggest flat side down" ${sel ? '' : 'disabled'}>${ic('orient')}</button>
         <button data-sl="arrange" title="Arrange this plate (what does not fit goes onto the next plate)" ${platesObjects(S.plate).length ? '' : 'disabled'}>${ic('arrange')}</button>
-        <button data-sl="copy" title="Duplicate" ${sel ? '' : 'disabled'}>${ic('copy')}</button>
+        <button data-sl="copy" title="Duplicate (Ctrl+D)" ${sel ? '' : 'disabled'}>${ic('copy')}</button>
+        <button data-sl="mirror" title="Mirror left-right (X)" ${sel ? '' : 'disabled'}>${ic('mirror')}</button>
         <button data-sl="del" title="Delete (Del)" ${sel ? '' : 'disabled'}>${ic('del')}</button></div>
       <div class="grp"><button data-sl="undo" title="Undo (Ctrl+Z)" ${S.undo.length ? '' : 'disabled'}>${ic('undo')}</button><button data-sl="view" title="Show the whole plate">${ic('home')}</button></div>`;
   } else if (S.mode === 'paint') {
@@ -1320,7 +1433,7 @@ function preparePanel() {
         <button data-obj-del="${o.id}" title="Delete">✕</button></div>`).join('')}</div>
         ${sel && sel.plate === S.plate ? `${xfFields(sel)}<label class="field" style="margin-top:8px"><span class="label">Move to</span><select data-obj-plate="${sel.id}">${plateOptions(sel.plate)}</select></label>` : ''}`
         : `<p class="muted small">${S.objects.length ? 'This plate is empty. Drag a model here, or pick one on another plate and use "Move to".' : 'Nothing on the plate yet. Drop STL, OBJ or 3MF files on the 3D view.'}</p>`}
-      <div class="row gap wrap" style="margin-top:8px"><button class="btn small" data-sl="add">Add model</button>${list.length ? '<button class="btn small" data-sl="arrange">Arrange</button><button class="btn small ghost-danger" data-sl="clear">Clear plate</button>' : ''}</div>
+      <div class="row gap wrap" style="margin-top:8px"><button class="btn small" data-sl="add">Add model</button>${list.length ? '<button class="btn small" data-sl="arrange">Arrange</button><button class="btn small ghost-danger" data-sl="clear">Clear plate</button>' : ''}${S.objects.length ? '<button class="btn small" data-sl="save" title="Download everything (all plates, positions, colours and painting) as a 3MF project you can open here again">Save project</button>' : ''}</div>
     </div>
     ${goButton()}`;
 }
@@ -1337,7 +1450,10 @@ function xfFields(o) {
     <label>Size %<input type="number" step="5" min="1" data-xf="s" value="${Math.round(m.scale.x * 1000) / 10}"></label>
     <label>Tilt X °<input type="number" step="15" data-xf="rx" value="${deg(e.x)}"></label>
     <label>Tilt Y °<input type="number" step="15" data-xf="ry" value="${deg(e.y)}"></label>
-  </div><p class="hint">${r1(b.max.x - b.min.x)} × ${r1(b.max.y - b.min.y)} × ${r1(b.max.z - b.min.z)} mm</p>`;
+    <label>Width mm<input type="number" step="1" min="0.1" data-xf="sx" value="${r1(b.max.x - b.min.x)}" title="Size along X; the model is scaled evenly"></label>
+    <label>Depth mm<input type="number" step="1" min="0.1" data-xf="sy" value="${r1(b.max.y - b.min.y)}" title="Size along Y; the model is scaled evenly"></label>
+    <label>Height mm<input type="number" step="1" min="0.1" data-xf="sz" value="${r1(b.max.z - b.min.z)}" title="Size along Z; the model is scaled evenly"></label>
+  </div><p class="hint"></p>`;
 }
 function renderXf() {
   const box = $('#sl-xf');
@@ -1457,6 +1573,7 @@ async function onClick(e) {
     case 'orient': autoOrient(o); break;
     case 'arrange': arrange(S.plate); break;
     case 'copy': duplicate(o); break;
+    case 'mirror': mirrorObject(o); break;
     case 'del': removeObject(o); break;
     case 'undo': undo(); break;
     case 'view': frameObjects(); break;
@@ -1464,6 +1581,7 @@ async function onClick(e) {
     case 'delplate': deletePlate(S.plate); break;
     case 'loaded': useLoaded(); break;
     case 'addfil': addFilament(); break;
+    case 'save': saveProject(); break;
     case 'remerge': delete S.merge[S.plate]; slice(S.plate); break;
     case 'all': renderAll(); $('#sl-all-dialog').showModal(); break;
     case 'slice': slice(S.plate); break;
@@ -1485,8 +1603,8 @@ async function onClick(e) {
     case 'gapnow': if (o) { painting = { obj: o, ch: S.paint.ch, value: 0, changed: new Map() }; await applyOnce({ object: o.mesh, faceIndex: 0 }); finishStroke(); } break;
     case 'clear':
       if (!(await F.confirmBox(`Clear plate ${S.plate + 1}?`, 'All models on this plate are removed.', 'Clear'))) return;
-      for (const x of platesObjects(S.plate)) objGroup.remove(x.mesh);
-      S.objects = S.objects.filter((x) => x.plate !== S.plate); S.undo = []; select(null); delete S.res[S.plate]; buildBed(); break;
+      for (const x of platesObjects(S.plate)) freeObject(x);
+      S.objects = S.objects.filter((x) => x.plate !== S.plate); S.undo = []; select(null); delete S.res[S.plate]; checkBounds(); buildBed(); renderSide(); break;
     default:
   }
 }
@@ -1548,6 +1666,10 @@ function applyXf(k, v) {
   if (k === 'x') m.position.x += v + plateX(o.plate) - (b.min.x + b.max.x) / 2;
   if (k === 'y') m.position.y += v - (b.min.y + b.max.y) / 2;
   if (k === 's') m.scale.setScalar(Math.max(0.01, v / 100));
+  if (k === 'sx' || k === 'sy' || k === 'sz') { // a size in mm: scale evenly so that side gets it
+    const cur = k === 'sx' ? b.max.x - b.min.x : k === 'sy' ? b.max.y - b.min.y : b.max.z - b.min.z;
+    if (cur > 1e-6 && v > 0) m.scale.multiplyScalar(Math.max(0.01, m.scale.x * v / cur) / m.scale.x);
+  }
   if (k === 'rx' || k === 'ry' || k === 'rz') {
     const e = new THREE.Euler().setFromQuaternion(m.quaternion, 'XYZ');
     e[k[1]] = THREE.MathUtils.degToRad(v);
@@ -1580,6 +1702,11 @@ function renderAll() {
 
 // ================================================================== slicing (one plate at a time)
 function hashArr(a) { if (!a) return 0; let h = 0; for (let i = 0; i < a.length; i++) h = (h * 31 + a[i]) | 0; return h; }
+/** The paint hashes of an object, computed once per change (recolor bumps o.rev); millions of pieces otherwise re-hash on every redraw. */
+function paintHashes(o) {
+  if (!o.hashes || o.hashes.rev !== o.rev) o.hashes = { rev: o.rev, h: [hashArr(o.states), hashArr(o.sup), hashArr(o.seam)] };
+  return o.hashes.h;
+}
 /** Filament number -> how many paint pieces use it, for the models on plate i. */
 /**
  * A free spot for the prime tower (purge block for colour changes) on plate i, from the models'
@@ -1683,7 +1810,7 @@ function askMerge(i, use) {
 function plateKey(i) {
   const px = plateX(i);
   return JSON.stringify([S.printerId, S.info && S.info.machine, S.process, S.bedType, S.filaments, S.overrides, S.merge[i] || null, S.infillFil || 0,
-    platesObjects(i).map((o) => { const e = o.mesh.matrix.elements.map((x) => Math.round(x * 1000)); e[12] -= Math.round(px * 1000); return [o.id, o.filament, e, hashArr(o.states), hashArr(o.sup), hashArr(o.seam)]; })]);
+    platesObjects(i).map((o) => { const e = o.mesh.matrix.elements.map((x) => Math.round(x * 1000)); e[12] -= Math.round(px * 1000); return [o.id, o.filament, e, ...paintHashes(o)]; })]);
 }
 
 function busy(title, msg, pct, cancel = false) {
@@ -1698,6 +1825,40 @@ function busy(title, msg, pct, cancel = false) {
 }
 
 /** World positions on the plate (plate i's own coordinates). */
+/**
+ * Downloads the whole workspace as one 3MF: every plate (laid out in the grid Bambu / Orca use,
+ * so it opens here and in those programs with the plates intact), positions, filament colours,
+ * painting (colours, supports, seams). Reloading the page empties the workspace; this keeps it.
+ */
+async function saveProject() {
+  if (!S.objects.length) return;
+  busy('Saving the project…', 'Packing the models', null, false);
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    const b = bed();
+    const cols = Math.ceil(Math.sqrt(Math.max(1, S.nPlates)));
+    const objs = [], plates = Array.from({ length: S.nPlates }, () => []);
+    for (let i = 0; i < S.nPlates; i++) {
+      const ox = (i % cols) * b.w * 1.2, oy = -Math.floor(i / cols) * b.d * 1.2;
+      for (const o of platesObjects(i)) {
+        const pos = platePositions(o, i);
+        if (ox || oy) for (let k = 0; k < pos.length; k += 3) { pos[k] += ox; pos[k + 1] += oy; }
+        objs.push({ name: o.name, positions: pos, paint: { color: codesOf(o, o.states), supports: codesOf(o, o.sup), seam: codesOf(o, o.seam) }, filament: o.filament });
+        plates[i].push(objs.length);
+      }
+    }
+    const fils = S.filaments.map((f) => ({ color: f.color, preset: f.preset, type: F.family(f.preset.replace(/^(Flashforge|Generic|FusRock)\s+/, '')) || 'PLA' }));
+    const data = export3mf(objs, 'Flash Bridge project', { plates: plates.filter((p) => p.length), filaments: fils, bed: b });
+    const name = `${(S.info && S.info.name) || 'flash-bridge'}-project-${new Date().toISOString().slice(0, 10)}.3mf`.replace(/[^\w.-]+/g, '_');
+    const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    F.toast(`Saved ${name} (${(data.length / 1e6).toFixed(1)} MB). Open it here again with "Add model".`);
+  } catch (e) {
+    F.toast('Could not save the project: ' + e.message, true);
+  } finally { busy(null); }
+}
 function platePositions(o, i) {
   o.mesh.updateMatrixWorld(true);
   const m = o.mesh.matrixWorld.elements, p = o.orig, out = new Float32Array(p.length), dx = plateX(i);
@@ -1803,9 +1964,18 @@ function plateName(i) {
   const base = (names.length === 1 ? names[0] : names.length ? `${names[0]} + ${names.length - 1} more` : 'Plate').slice(0, 52);
   return S.nPlates > 1 ? `${base} - plate ${i + 1}` : base;
 }
+let pollFails = 0;
 async function poll(i) {
   clearTimeout(pollTimer);
-  const r = await F.api(`slicer/job?plate=${i + 1}`);
+  let r;
+  try {
+    r = await F.api(`slicer/job?plate=${i + 1}`);
+    pollFails = 0;
+  } catch (e) {
+    // a lost request (Wi-Fi blip, board busy) must not end the polling: try again a few times
+    if (++pollFails <= 20) { busy(`Slicing plate ${i + 1} on the board…`, 'Waiting for the board to answer…', null, true); pollTimer = setTimeout(() => poll(i), 2000); return; }
+    busy(null); F.toast('Lost the connection to the board while slicing. Reload the page to see the result.', true); return;
+  }
   const j = r.job;
   if (!j) { busy(null); return; }
   S.res[i] = S.res[i] || { key: '', g: null };
@@ -1820,7 +1990,7 @@ async function poll(i) {
   if (j.state === 'done' && S.plate === i && S.mode === 'preview') await loadPreview(i);
   else if (j.state === 'error') F.toast(`Plate ${i + 1}: slicing failed: ${j.error || j.message}`, true);
   renderSide();
-  if (queue.length) { const next = queue.shift(); await slice(next); }
+  while (queue.length) { if (await slice(queue.shift())) break; } // a plate that cannot start (e.g. cancelled colour question) is skipped
 }
 async function sliceAll() {
   queue = Array.from({ length: S.nPlates }, (_, i) => i).filter((i) => platesObjects(i).length && !(S.res[i] && S.res[i].job && S.res[i].job.state === 'done' && S.res[i].key === plateKey(i)));
@@ -1832,7 +2002,8 @@ async function cancelSlice() {
   await F.api('slicer/job/cancel', { method: 'POST' });
   clearTimeout(pollTimer);
   busy(null);
-  if (S.res[S.plate]) S.res[S.plate] = null;
+  S.res.forEach((r, k) => { if (r && r.job && r.job.state === 'slicing') S.res[k] = null; }); // the one that was running, not necessarily the shown plate
+  renderPlateBar();
   location.hash = '#slicer/prepare';
 }
 
@@ -1848,6 +2019,9 @@ async function sendToPrinter(i) {
 function previewPlate(i) {
   const r = S.res[i];
   clearPreview();
+  // big parsed G-code of other plates is dropped (re-read in a few seconds when needed): several
+  // large plates would otherwise hold hundreds of MB
+  S.res.forEach((x, k) => { if (x && k !== i && x.g && x.g.count > LINE_PREVIEW_AT) x.g = null; });
   if (!platesObjects(i).length) { renderSide(); return; }
   if (!r || !r.job || r.key !== plateKey(i)) {
     if (!(r && r.job && r.job.state === 'slicing')) { slice(i); return; }
@@ -1856,8 +2030,7 @@ function previewPlate(i) {
   renderSide();
 }
 function clearPreview() {
-  previewGroup.clear();
-  segMesh = null;
+  disposePreview();
   $('#sl-layers').classList.add('hidden');
   $('#sl-legend').classList.add('hidden');
   invalidate();
@@ -1876,12 +2049,42 @@ async function loadPreview(i) {
     F.toast(e.message, true);
   } finally { busy(null); }
 }
-let segMesh = null;
-function buildPreview(g, i) {
+let segMesh = null; // InstancedMesh of boxes (small prints) or LineSegments (big ones)
+/** Above this many printed segments the preview is drawn as lines: boxes would need ~80 bytes each on the GPU. */
+const LINE_PREVIEW_AT = 800000;
+function disposePreview() {
+  if (segMesh) { segMesh.geometry.dispose(); segMesh.material.dispose(); segMesh = null; }
   previewGroup.clear();
+}
+function buildPreview(g, i) {
+  disposePreview();
   previewGroup.position.set(plateX(i), 0, 0);
   const n = g.count;
   if (!n) { F.toast('The G-code has no printed paths.', true); return; }
+  if (n > LINE_PREVIEW_AT) {
+    const seg = g.seg, pos = new Float32Array(n * 6);
+    for (let k = 0; k < n; k++) {
+      const o = k * 7, zz = seg[o + 4] - Math.max(0.05, seg[o + 5]) / 2;
+      pos[k * 6] = seg[o]; pos[k * 6 + 1] = seg[o + 1]; pos[k * 6 + 2] = zz;
+      pos[k * 6 + 3] = seg[o + 2]; pos[k * 6 + 4] = seg[o + 3]; pos[k * 6 + 5] = zz;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 8), 4)); // RGBA: alpha 0 hides a line type
+    segMesh = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, alphaTest: 0.5 }));
+    segMesh.userData.lines = true;
+    segMesh.frustumCulled = false;
+    previewGroup.add(segMesh);
+    S.previewG = g;
+    colorPreview();
+    const sl = $('#sl-layer');
+    sl.max = String(g.layerEnd.length);
+    setLayer(g.layerEnd.length);
+    $('#sl-layers').classList.toggle('hidden', S.mode !== 'preview');
+    $('#sl-legend').classList.toggle('hidden', S.mode !== 'preview');
+    invalidate();
+    return;
+  }
   segMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial(), n);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), z = new THREE.Vector3(0, 0, 1);
   const seg = g.seg;
@@ -1915,6 +2118,19 @@ function colorPreview() {
   const feats = FEATURES.map(([, col]) => new THREE.Color(col));
   const hidden = new THREE.Color(0, 0, 0);
   const byTool = S.previewColor === 'tool';
+  if (segMesh.userData.lines) {
+    const col = segMesh.geometry.attributes.color, a = col.array;
+    for (let i = 0; i < g.count; i++) {
+      const f = g.feature[i];
+      const hid = S.hiddenFeatures.has(f);
+      if (!hid) c.copy(byTool ? (tools[g.tool[i]] || feats[14]) : feats[f]);
+      const k = i * 8, al = hid ? 0 : 1;
+      a[k] = a[k + 4] = c.r; a[k + 1] = a[k + 5] = c.g; a[k + 2] = a[k + 6] = c.b; a[k + 3] = a[k + 7] = al;
+    }
+    col.needsUpdate = true;
+    legend();
+    return;
+  }
   for (let i = 0; i < g.count; i++) {
     const f = g.feature[i];
     if (S.hiddenFeatures.has(f)) { segMesh.setColorAt(i, hidden); continue; }
@@ -1933,18 +2149,23 @@ function colorPreview() {
     segMesh.instanceMatrix.needsUpdate = true;
     segMesh.userData.hid = S.hiddenFeatures.size > 0;
   }
-  const used = byTool ? [...new Set(g.tool)].sort((a, b) => a - b) : [...new Set(g.feature)].sort((a, b) => a - b);
-  $('#sl-legend').innerHTML = byTool
-    ? used.map((t) => `<div class="li"><i style="background:${esc(filColor(fil[t] || t + 1))}"></i>Filament ${fil[t] || t + 1}</div>`).join('')
-    : used.map((f) => `<button class="li ${S.hiddenFeatures.has(f) ? 'off' : ''}" data-feat="${f}" title="Show / hide"><i style="background:${FEATURES[f][1]}"></i>${FEATURES[f][0]}</button>`).join('');
-  invalidate();
+  legend();
+  function legend() {
+    g.used ??= { tool: [...new Set(g.tool)].sort((a, b) => a - b), feature: [...new Set(g.feature)].sort((a, b) => a - b) };
+    const used = byTool ? g.used.tool : g.used.feature;
+    $('#sl-legend').innerHTML = byTool
+      ? used.map((t) => `<div class="li"><i style="background:${esc(filColor(fil[t] || t + 1))}"></i>Filament ${fil[t] || t + 1}</div>`).join('')
+      : used.map((f) => `<button class="li ${S.hiddenFeatures.has(f) ? 'off' : ''}" data-feat="${f}" title="Show / hide"><i style="background:${FEATURES[f][1]}"></i>${FEATURES[f][0]}</button>`).join('');
+    invalidate();
+  }
 }
 function setLayer(n) {
   const g = S.previewG;
   if (!g || !segMesh) return;
   n = Math.max(1, Math.min(g.layerEnd.length, n));
   S.layer = n;
-  segMesh.count = g.layerEnd[n - 1];
+  if (segMesh.userData.lines) segMesh.geometry.setDrawRange(0, g.layerEnd[n - 1] * 2);
+  else segMesh.count = g.layerEnd[n - 1];
   $('#sl-layer').value = String(n);
   $('#sl-layer-n').textContent = n;
   $('#sl-layer-z').textContent = g.layerZ[n - 1].toFixed(2);

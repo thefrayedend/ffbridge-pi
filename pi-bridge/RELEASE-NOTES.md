@@ -30,6 +30,9 @@ setup page, Spoolman, Discord, and AI print-failure detection (Obico model, runs
 - **Drag models** with the mouse or a finger, also onto other plates; dragging past the last plate makes a new one. The add-plate button is now labelled **+ Plate**.
 - **More colours than heads:** up to 16 filaments per project. Each plate is sliced with only the colours it uses, so plates can use different spools. A plate with more colours than the printer holds asks which filament prints each extra colour (or cancel and repaint).
 - Slicing no longer stops on painted supports when Supports is off (they are left out, with a note), and the prime tower is placed in a free spot on the plate instead of hanging off the back.
+- **Much faster opening of big projects** (a 9-colour MakerWorld project: 67 s → 18 s; a 4.7-million-triangle scan: 89 s → 23 s), and the page stays responsive while it works. Plates pack for slicing 3× faster. Big previews (millions of lines) use a fraction of the memory.
+- **Save project** (Plate card): all plates, positions, filaments and painting as one 3MF, to open here again or in OrcaSlicer / Bambu Studio.
+- **Mirror** (X), **Ctrl+D** duplicate, **arrow keys** nudge, size in **mm** fields; stale slice results are cleaned off the SD card; slicing refuses when the card is nearly full instead of failing halfway.
 - **Infill filament**, also for multi-colour prints (stock OrcaSlicer can't): the inside of the models in one filament (e.g. white), the colours stay on the outside as a ~3 mm skin.
 - **Prime tower fits better:** placed by the models' real outline; when the usual cone-shaped tower (it widens with the print height) has no room, a ribbed or plain one is used.
 - **Very detailed models open:** models with millions of triangles (scans, sculpts) are simplified to about 1 million when opened, keeping the shape within 0.05 mm and the painting exactly. When the models fill the plate, a Creator 5 prints without the prime tower.

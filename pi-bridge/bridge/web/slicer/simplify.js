@@ -7,6 +7,7 @@
 // no gaps open between regions. Triangles painted finer than one triangle are kept as they are.
 // meshoptimizer (MIT) does the edge collapses; it only moves vertices onto existing vertices.
 import { MeshoptSimplifier as M } from './vendor/meshopt_simplifier.js';
+import { weldPositions } from './project3mf.js';
 
 /** Above this many triangles a model is simplified when it is opened. */
 export const SIMPLIFY_AT = 1500000;
@@ -18,30 +19,7 @@ export const MAX_ERROR_MM = 0.05;
 /** A paint code for one whole triangle (no subdivision): "", "4", "8", "xC" or "xFC". */
 const isLeaf = (c) => c.length <= 1 || (c.length === 2 && c[1] === 'C') || (c.length === 3 && c[1] === 'F' && c[2] === 'C');
 
-/** Same position -> same vertex (exact float match), for a non-indexed triangle list. */
-export function weld(pos) {
-  const n = pos.length / 3;
-  const pu = new Uint32Array(pos.buffer, pos.byteOffset, pos.length);
-  let size = 1;
-  while (size < n * 2) size *= 2;
-  const mask = size - 1;
-  const table = new Int32Array(size).fill(-1);
-  const index = new Uint32Array(n);
-  const verts = new Float32Array(pos.length);
-  const vu = new Uint32Array(verts.buffer);
-  let nv = 0;
-  for (let i = 0; i < n; i++) {
-    const a = pu[i * 3], b = pu[i * 3 + 1], c = pu[i * 3 + 2];
-    let h = (Math.imul(a, 73856093) ^ Math.imul(b, 19349663) ^ Math.imul(c, 83492791)) & mask;
-    for (;;) {
-      const k = table[h];
-      if (k < 0) { table[h] = nv; vu[nv * 3] = a; vu[nv * 3 + 1] = b; vu[nv * 3 + 2] = c; index[i] = nv++; break; }
-      if (vu[k * 3] === a && vu[k * 3 + 1] === b && vu[k * 3 + 2] === c) { index[i] = k; break; }
-      h = (h + 1) & mask;
-    }
-  }
-  return { index, verts: verts.slice(0, nv * 3) };
-}
+export const weld = weldPositions;
 
 /**
  * positions: Float32Array, 9 numbers per triangle. paint: {color, supports, seam}, each an array
