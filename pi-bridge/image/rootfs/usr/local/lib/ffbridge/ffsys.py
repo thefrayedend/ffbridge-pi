@@ -9,7 +9,7 @@ Sub-commands used by systemd units:
 
 Sub-commands used by the bridge's setup page (via `sudo ffbridge-helper <cmd>`), all print JSON:
   net-status | wifi-scan | wifi-connect <ssid> (password on stdin) | wifi-forget
-  set-hostname <name> | reboot | shutdown | restart-ai | system-info
+  set-hostname <name> | reboot | shutdown | restart-ai | system-info | diag
   printernet-status | printernet-enable <ssid> (password on stdin) | printernet-disable
   printernet-internet <minutes, 0 = block, -1 = until turned off>
 """
@@ -58,32 +58,64 @@ def ai_resume():
     return {"ok": r.returncode == 0, "message": "AI service started again." if r.returncode == 0 else r.stderr.strip()}
 
 
+def diag():
+    """What happened lately, for troubleshooting from the web page: the bridge's own log of this and
+    the previous runs (systemd journal), and memory events from the kernel (out-of-memory kills)."""
+    out = {"ok": True}
+    r = run(["journalctl", "-u", "ffbridge", "-u", "ffai", "--no-pager", "-o", "short-iso", "-n", "300"], timeout=30)
+    out["services"] = (r.stdout or r.stderr or "").splitlines()[-300:]
+    r = run(["journalctl", "-k", "--no-pager", "-o", "short-iso", "--since", "-2d", "-g", "oom|Out of memory|Killed process"], timeout=30)
+    out["memory_events"] = [l for l in (r.stdout or "").splitlines() if not l.startswith("-- ")][-60:]
+    try:
+        out["swaps"] = open("/proc/swaps").read().splitlines()
+    except OSError:
+        pass
+    return out
+
+
 def zram_setup():
     """Compressed swap in RAM (zstd, half the memory): big slices squeeze into it instead of
-    the out-of-memory killer stopping them. Nothing is written to the SD card. Safe to repeat."""
+    the out-of-memory killer stopping them. Nothing is written to the SD card. Safe to repeat.
+    Orange Pi images may already use zram0 (e.g. for /var/log in RAM), so a free device is used."""
+    def put(path, value):
+        with open(path, "w") as f:
+            f.write(value)
     try:
-        if "/dev/zram0" in open("/proc/swaps").read():
+        swaps = open("/proc/swaps").read()
+        if "/dev/zram" in swaps:
             return {"ok": True, "message": "zram swap already on."}
         mem_kb = int(next(l for l in open("/proc/meminfo") if l.startswith("MemTotal")).split()[1])
         run(["modprobe", "zram"])
-        if not os.path.exists("/sys/block/zram0"):
+        if not os.path.isdir("/sys/block/zram0") and not os.path.exists("/sys/class/zram-control/hot_add"):
             return {"ok": False, "message": "This kernel has no zram."}
-        def put(path, value):
-            with open(path, "w") as f:
-                f.write(value)
+        dev = None
+        for name in sorted(os.listdir("/sys/block")):
+            if not name.startswith("zram"):
+                continue
+            try:
+                if int(open(f"/sys/block/{name}/disksize").read().strip() or 0) == 0:
+                    dev = name
+                    break
+            except (OSError, ValueError):
+                pass
+        if dev is None and os.path.exists("/sys/class/zram-control/hot_add"):
+            dev = "zram" + open("/sys/class/zram-control/hot_add").read().strip()
+        if dev is None:
+            return {"ok": False, "message": "No free zram device."}
         for alg in ("zstd", "lz4", "lzo-rle"):
             try:
-                put("/sys/block/zram0/comp_algorithm", alg)
+                put(f"/sys/block/{dev}/comp_algorithm", alg)
                 break
             except OSError:
                 pass
-        put("/sys/block/zram0/disksize", str(mem_kb // 2 * 1024))
-        run(["mkswap", "/dev/zram0"], check=True)
-        run(["swapon", "-p", "100", "/dev/zram0"], check=True)
+        put(f"/sys/block/{dev}/disksize", str(mem_kb // 2 * 1024))
+        run(["mkswap", f"/dev/{dev}"], check=True)
+        run(["swapon", "-p", "100", f"/dev/{dev}"], check=True)
         put("/proc/sys/vm/swappiness", "100")
-        return {"ok": True, "message": f"zram swap on ({mem_kb // 2 // 1024} MB)."}
+        return {"ok": True, "message": f"zram swap on /dev/{dev} ({mem_kb // 2 // 1024} MB)."}
     except Exception as e:  # noqa: BLE001 - report, never break the bridge start
         return {"ok": False, "message": f"zram swap not set up: {e}"}
+
 
 # ----------------------------------------------------------------------------- helpers
 def run(cmd, check=False, timeout=60, input_text=None):
@@ -1149,6 +1181,10 @@ def system_info():
     try:
         mem = {l.split(":")[0]: int(l.split()[1]) for l in open("/proc/meminfo")}
         info["memory"] = f"{(mem['MemTotal'] - mem['MemAvailable']) / 1024:.0f} MB used of {mem['MemTotal'] / 1024:.0f} MB"
+        if mem.get("SwapTotal"):
+            info["swap"] = f"{(mem['SwapTotal'] - mem['SwapFree']) / 1024:.0f} MB used of {mem['SwapTotal'] / 1024:.0f} MB (compressed, in memory)"
+        else:
+            info["swap"] = "off"
     except (OSError, KeyError, ValueError):
         pass
     try:
@@ -1210,6 +1246,8 @@ def main():
         out(ai_resume())
     elif cmd == "zram-setup":
         out(zram_setup())
+    elif cmd == "diag":
+        out(diag())
     elif cmd == "system-info":
         out(system_info())
     elif cmd == "reboot":

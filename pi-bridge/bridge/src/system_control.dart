@@ -49,6 +49,8 @@ class SystemControl {
   Future<Map<String, dynamic>> aiResume() => _run(['ai-resume']);
   Future<Map<String, dynamic>> updateStart(String baseUrl) => _run(['update-start', baseUrl]);
   Future<Map<String, dynamic>> systemInfo() => _run(['system-info']);
+  /// Recent service log (also of earlier runs) and kernel out-of-memory events, for troubleshooting.
+  Future<Map<String, dynamic>> diag() => _run(['diag'], timeout: const Duration(seconds: 60));
   // Printer network (router mode): the board's Wi-Fi becomes a private network for the printers.
   Future<Map<String, dynamic>> printerNetStatus() => _run(['printernet-status']);
   Future<Map<String, dynamic>> printerNetEnable(String ssid, String password) =>

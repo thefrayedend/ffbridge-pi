@@ -335,6 +335,7 @@ class SetupServer {
         return await _json(req, {'ok': true, 'message': pi.setupPassword.isEmpty ? 'Password removed.' : 'Password set. Your browser will ask for it next time (any user name works).'});
       }
       if (p == 'system/info' && m == 'GET') return await _json(req, await sys.systemInfo());
+      if (p == 'system/diag' && m == 'GET') return await _json(req, await sys.diag());
 
       return await _json(req, {'error': 'not found'}, status: 404);
     } catch (e) {

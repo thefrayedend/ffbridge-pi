@@ -112,6 +112,9 @@ export async function show(mode) {
   resize();
   const running = Object.values(st.jobs || {}).find((j) => j.state === 'slicing');
   if (running) { poll(running.plate - 1); return; }
+  // a plate this page still thinks is slicing, but the board does not: find out (it shows a message)
+  const stale = S.res.findIndex((r, k) => r && r.job && r.job.state === 'slicing' && !(st.jobs || {})[k + 1]);
+  if (stale >= 0) { await poll(stale); return; }
   if (mode === 'preview' && S.info && S.info.known) previewPlate(S.plate);
 }
 
@@ -1977,7 +1980,16 @@ async function poll(i) {
     busy(null); F.toast('Lost the connection to the board while slicing. Reload the page to see the result.', true); return;
   }
   const j = r.job;
-  if (!j) { busy(null); return; }
+  if (!j) {
+    // the board has no such job any more: it restarted while slicing (or the job was cleaned up)
+    busy(null);
+    const was = S.res[i] && S.res[i].job && S.res[i].job.state === 'slicing';
+    S.res[i] = null;
+    queue = [];
+    if (was) F.toast(`Plate ${i + 1}: the board stopped while slicing (most likely it ran out of memory) and the slice was lost. Try again; if it happens again, put fewer or smaller models on the plate.`, true);
+    renderPlateBar(); renderSide();
+    return;
+  }
   S.res[i] = S.res[i] || { key: '', g: null };
   S.res[i].job = j;
   if (j.state === 'slicing') {
