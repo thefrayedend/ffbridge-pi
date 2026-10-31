@@ -31,6 +31,7 @@ setup page, Spoolman, Discord, and AI print-failure detection (Obico model, runs
 - **More colours than heads:** up to 16 filaments per project. Each plate is sliced with only the colours it uses, so plates can use different spools. A plate with more colours than the printer holds asks which filament prints each extra colour (or cancel and repaint).
 - Slicing no longer stops on painted supports when Supports is off (they are left out, with a note), and the prime tower is placed in a free spot on the plate instead of hanging off the back.
 - **Much faster opening of big projects** (a 9-colour MakerWorld project: 67 s → 18 s; a 4.7-million-triangle scan: 89 s → 23 s), and the page stays responsive while it works. Plates pack for slicing 3× faster. Big previews (millions of lines) use a fraction of the memory.
+- Numbers typed without a leading zero (".08") no longer stop a slice with "value that is not allowed".
 - **Layer height** is a dropdown of the usual heights for the selected nozzle, with Other… to type any value; decimal fields no longer step by 1.
 - **Lighter G-code** (Quality card, Auto): detailed plates (200k+ triangles) are sliced with 0.05 mm paths and straight moves instead of arcs. Measured on a 1M-triangle painted helmet: the engine's peak memory went from 2.5 GB to 1.7 GB, same print (even 40 min faster). Before, that plate ran the 4 GB board out of memory.
 - **New project** (Plate card): removes every model, plate and slice to start over; settings stay.

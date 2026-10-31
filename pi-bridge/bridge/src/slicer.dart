@@ -551,9 +551,9 @@ class Slicer {
     final over = (o['overrides'] as Map? ?? {});
     for (final e in over.entries) {
       final k = '${e.key}';
-      final v = '${e.value}';
       final sc = keys[k];
       if (sc == null) throw SlicerException('Unknown setting "$k".');
+      final v = tidyNumber('${e.value}');
       if (!validValue(sc, v)) throw SlicerException('Setting "${sc['label'] ?? k}" has a value that is not allowed ($v).');
       args.add('--${k.replaceAll('_', '-')}=$v');
     }
@@ -855,6 +855,17 @@ String? matchModel(String printerModel, List<String> engineModels) {
 const _safeTypes = {'float', 'int', 'bool', 'enum', 'percent', 'float_or_percent'};
 /// A value the browser sends for a setting matches the setting's type (numbers, on/off, a listed
 /// choice, a percentage); anything else is refused before it reaches the engine.
+/// Numbers as people type them: ".08" -> "0.08", "-.5%" -> "-0.5%", "2." -> "2".
+String tidyNumber(String v) {
+  final t = v.trim();
+  final m = RegExp(r'^(-?)(\d*)(\.\d*)?(%?)$').firstMatch(t);
+  if (m == null || (m.group(2)!.isEmpty && (m.group(3) ?? '').length < 2)) return t;
+  final whole = m.group(2)!.isEmpty ? '0' : m.group(2)!;
+  var frac = m.group(3) ?? '';
+  if (frac == '.') frac = '';
+  return '${m.group(1)}$whole$frac${m.group(4)}';
+}
+
 bool validValue(Map<String, dynamic> s, String v) {
   if (v.length > 64 || v.contains('\n')) return false;
   final num_ = RegExp(r'^-?\d+(\.\d+)?([eE]-?\d+)?$');

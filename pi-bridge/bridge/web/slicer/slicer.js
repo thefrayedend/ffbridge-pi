@@ -171,6 +171,9 @@ async function loadPrinterInner(id, extra) {
   S.process = r.processes.includes(prefs.process) ? prefs.process : r.defaultProcess;
   S.bedType = prefs.bedType || r.defaultBedType || '';
   S.overrides = prefs.overrides && typeof prefs.overrides === 'object' ? prefs.overrides : {};
+  // saved settings: numbers as typed (".08") tidied, and ones this engine does not know dropped
+  const known = new Set(S.schema.map((x) => x.key));
+  for (const k of Object.keys(S.overrides)) { if (known.has(k) || k === 'curr_bed_type') S.overrides[k] = tidyNumber(String(S.overrides[k])); else delete S.overrides[k]; }
   S.previewColor = prefs.color || 'tool';
   S.infillFil = +prefs.infill || 0;
   S.light = ['auto', 'on', 'off'].includes(prefs.light) ? prefs.light : 'auto';
@@ -1426,6 +1429,12 @@ function settingRow(s, label, tip = false) {
   return `<div class="sl-set ${changed ? 'changed' : ''}"><span class="nm" title="${esc(s.tooltip || '')}"><span>${esc(label || s.label)}</span>${changed ? `<button class="reset" data-reset="${key}" title="Back to the profile's value">↺</button>` : ''}</span>${input}${tip && s.tooltip ? `<span class="tip">${esc(s.tooltip)}</span>` : ''}</div>`;
 }
 
+/** Numbers as people type them: ".08" -> "0.08", "-.5%" -> "-0.5%", "2." -> "2". Anything else unchanged. */
+function tidyNumber(v) {
+  const m = /^(-?)(\d*)(\.\d*)?(%?)$/.exec(v.trim());
+  if (!m || (!m[2] && (m[3] || '').length < 2)) return v;
+  return m[1] + (m[2] || '0') + (m[3] === '.' ? '' : m[3] || '') + m[4];
+}
 /** Arrow step for a decimal field: the precision the value is written in (0.8 → 0.1, 0.45 → 0.01). */
 function stepFor(v, whole = 0.1) { const d = (String(v).split('.')[1] || '').length; return d ? +(10 ** -d).toFixed(d) : whole; }
 /** Nozzle size (mm) of the selected machine profile, from its name ("0.4 nozzle"). */
@@ -1677,6 +1686,7 @@ async function onChange(e) {
     if (t.value === '__other') { S.customLayer = true; renderSide(); return; } // layer height: show a box to type in
     let v = t.type === 'checkbox' ? (t.checked ? '1' : '0') : t.value;
     if (t.dataset.pct !== undefined) v = v + '%';
+    v = tidyNumber(v);
     if (key === 'layer_height') {
       // typed in the "Other…" box: back to the dropdown, which then lists this value too
       S.customLayer = false;
