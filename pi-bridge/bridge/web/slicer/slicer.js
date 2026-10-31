@@ -169,7 +169,7 @@ function defaultFilaments(info, saved) {
   const out = [];
   for (let i = 0; i < n; i++) {
     const s = slots[i];
-    const keep = saved && saved[i] && list.includes(saved[i].preset) ? saved[i] : null;
+    const keep = saved && saved[i] && info.filaments.includes(saved[i].preset) ? saved[i] : null;
     out.push(keep || { preset: pick(s && s.material), color: (s && s.hasFilament !== false && s.color) || ['#E8E8E8', '#202020', '#D32F2F', '#1E63D6'][i % 4] });
   }
   return out;
