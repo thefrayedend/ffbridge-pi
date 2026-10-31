@@ -93,9 +93,12 @@ Future<void> main() async {
   j.onLine('[[SLICER_EVENT]] {"event":"slice_warning","message":"bed_temperature_too_high_than_filament","tag":"bed_temperature_too_high_than_filament"}');
   j.onLine('noise');
   check('progress read', j.percent == 42 && j.message == 'Generating walls');
-  check('warning made readable', j.warnings.single.startsWith('The bed is hotter'));
+  check('warning made readable', j.warnings.single.startsWith('The bed is warmer'));
   j.onLine('[[SLICER_EVENT]] {"event":"slice_error","message":"Nothing to print"}');
   check('error kept', j.error == 'Nothing to print');
+  final j2 = SliceJob(name: 'y.gcode', printerId: 'p', dir: dir.path);
+  j2.onLine('[[SLICER_EVENT]] {"event":"engine_log","message":"Detected missing Voronoi vertex even after the rotation of input.","severity":"error","tag":"EngineLogRecord"}');
+  check('engine log notes are not errors', j2.error == null && j2.engineNote != null);
 
   check('probe model is a valid STL', probeStl().length == 84 + 12 * 50);
 

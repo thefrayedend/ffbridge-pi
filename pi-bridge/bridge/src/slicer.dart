@@ -560,7 +560,7 @@ class Slicer {
         return;
       }
       if (code != 0 || !g.existsSync()) {
-        j.fail(j.error ?? _resultError(j.dir) ?? 'The slicer stopped with an error ($code).');
+        j.fail(j.error ?? _resultError(j.dir) ?? j.engineNote ?? 'The slicer stopped with an error ($code).');
         return;
       }
       final out = File('${j.dir}/preview.gcode');
@@ -709,6 +709,7 @@ class SliceJob {
   int percent = 0;
   String message = 'Starting the slicer…';
   String? error;
+  String? engineNote; // last "error" line from the engine's own log (often harmless)
   String? gcode, project;
   Map<String, dynamic> stats = {};
   final List<String> warnings = [];
@@ -737,12 +738,17 @@ class SliceJob {
     } else if (ev == 'slice_warning') {
       final w = friendlyWarning('${e['message'] ?? ''}', '${e['tag'] ?? ''}');
       if (!warnings.contains(w)) warnings.add(w);
+    } else if (ev == 'engine_log') {
+      // The engine's own log lines: "error" ones are often notes it recovers from by itself
+      // (e.g. "missing Voronoi vertex"); only used when the slice fails without a better reason.
+      if ('${e['severity']}' == 'error') engineNote = '${e['message'] ?? ''}';
     } else if (ev.contains('error') || '${e['severity']}' == 'error') {
       error ??= '${e['message'] ?? 'Slicing failed.'}';
     }
   }
 
   void finish(String path, Map<String, dynamic> s) {
+    error = null;
     gcode = path;
     stats = s;
     state = 'done';
@@ -920,7 +926,8 @@ Map<String, dynamic> gcodeStats(File f) {
 
 String friendlyWarning(String msg, String tag) {
   const known = {
-    'bed_temperature_too_high_than_filament': 'The bed is hotter than one of the filaments likes (check the plate type).',
+    'bed_temperature_too_high_than_filament': 'The bed is warmer than one filament\'s softening point (Flashforge\'s own profiles do this for PLA and PETG). '
+        'That is normal; in a closed printer like the Creator 5, leave the door or lid open for those filaments so the nozzle does not clog.',
     'filament_unprintable': 'A filament cannot be printed with this printer / nozzle.',
     'toolpath_outside': 'Part of the print is outside the printable area.',
     'toolpath_conflict': 'Some paths collide with each other or with the prime tower.',

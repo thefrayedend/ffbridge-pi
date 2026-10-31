@@ -280,7 +280,7 @@ export function import3mf(buffer) {
           sup.push(flip ? '' : (t.getAttribute('paint_supports') || t.getAttribute('slic3rpe:custom_supports') || ''));
           seam.push(flip ? '' : (t.getAttribute('paint_seam') || t.getAttribute('slic3rpe:custom_seam') || ''));
         }
-        if (pos.length / 9 > 2000000) throw new Error('This model has more than 2 million triangles.');
+        if (pos.length / 9 > 12000000) throw new Error('This model has more than 12 million triangles, too many to open in a browser. Simplify it on a PC first (OrcaSlicer: right-click → Simplify model).');
       } else {
         for (const c of o.getElementsByTagName('component')) {
           const path = c.getAttribute('p:path') || c.getAttribute('path');

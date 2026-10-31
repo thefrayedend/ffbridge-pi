@@ -131,6 +131,10 @@ command the `ffbridge` user may run with sudo. Data lives in `/var/lib/ffbridge`
 
 ## Developing / testing without a board
 
+Before changing bridge code, read **[APP-NOTES.md](APP-NOTES.md)**: a phone app is planned, and code
+that is being edited anyway should be made app-friendly at the same time.
+
+
 ```bash
 # terminal 1 – printer simulator (Creator 5 Pro API + camera)
 cd android-tv-app/source && dart tool/c5sim.dart 127.0.0.1

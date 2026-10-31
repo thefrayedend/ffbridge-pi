@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import { TransformControls } from './vendor/TransformControls.js';
 import { STLLoader } from './vendor/STLLoader.js';
+import { simplifyModel, SIMPLIFY_AT } from './simplify.js';
 import { OBJLoader } from './vendor/OBJLoader.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast, INTERSECTED, NOT_INTERSECTED, CONTAINED } from './vendor/three-mesh-bvh.js';
 import { import3mf, export3mf, subdivide, pieceCentres, decodeTree, stateAt, encodeTree } from './project3mf.js';
@@ -109,6 +110,17 @@ function savePrefs() {
 function loadPrefs(id) { try { return JSON.parse(localStorage.getItem(prefKey(id)) || '{}'); } catch (_) { return {}; } }
 
 async function loadPrinter(id, extra = '') {
+  try {
+    await loadPrinterInner(id, extra);
+  } catch (e) {
+    // never sit on "Reading the printer profiles…": show what went wrong (and a retry button)
+    console.error(e);
+    S.loading = false; S.info = null;
+    S.err = `Could not open the slicer: ${e && e.message ? e.message : e}. Reload the page. If it keeps happening, take a screenshot of this message.`;
+    renderSide();
+  }
+}
+async function loadPrinterInner(id, extra) {
   S.printerId = id;
   S.loading = true; S.err = '';
   renderSide();
@@ -635,7 +647,7 @@ async function addFiles(files) {
       if (lower.endsWith('.3mf')) await add3mf(buf, base);
       else if (lower.endsWith('.stl')) {
         const g = new STLLoader().parse(buf);
-        placeNew(addObject({ name: base, positions: nonIndexed(g) }));
+        placeNew(addObject({ name: base, positions: await lighter(base, nonIndexed(g)) }));
       } else if (lower.endsWith('.obj')) {
         const grp = new OBJLoader().parse(new TextDecoder().decode(buf));
         const parts = [];
@@ -644,7 +656,7 @@ async function addFiles(files) {
         if (!parts.length) throw new Error('No surfaces found in this OBJ.');
         const all = new Float32Array(parts.reduce((n, p) => n + p.length, 0));
         let k = 0; for (const p of parts) { all.set(p, k); k += p.length; }
-        placeNew(addObject({ name: base, positions: all }));
+        placeNew(addObject({ name: base, positions: await lighter(base, all) }));
       } else throw new Error('Only STL, OBJ and 3MF files can be added.');
     } catch (e) {
       F.toast(file.name + ': ' + e.message, true);
@@ -652,6 +664,22 @@ async function addFiles(files) {
   }
   checkBounds(); buildBed(); renderSide();
   if (S.objects.length === files.length || platesObjects(S.plate).length <= 3) frameObjects();
+}
+/**
+ * Models with millions of triangles (scans, sculpts) are simplified when opened: same shape
+ * (within 0.05 mm), same painting, about a million triangles - far finer than the nozzle prints,
+ * and light enough for the browser and the board's slicer. Returns the (new) positions; the
+ * paint object, if given, gets the matching codes.
+ */
+async function lighter(name, positions, paint = null) {
+  const n = positions.length / 9;
+  if (n <= SIMPLIFY_AT) return positions;
+  busy(`Simplifying ${name}…`, `${(n / 1e6).toFixed(1)} million triangles is far more detail than the nozzle can print`, null);
+  await new Promise((r) => setTimeout(r, 30));
+  const r = await simplifyModel(positions, paint || {});
+  if (paint) { paint.color = r.color; paint.supports = r.supports; paint.seam = r.seam; }
+  F.toast(`${name}: simplified from ${(r.before / 1e6).toFixed(1)} to ${(r.after / 1e6).toFixed(1)} million triangles (shape within ${Math.max(0.01, r.error).toFixed(2)} mm, painting kept) so the board can slice it.`);
+  return r.positions;
 }
 function nonIndexed(g) {
   const ng = g.index ? g.toNonIndexed() : g;
@@ -725,7 +753,7 @@ async function add3mf(buf, base) {
     if (n > best) { best = n; guess = [w, d]; }
   }
   const added = [];
-  const place = (list, bx, cell, target) => {
+  const place = async (list, bx, cell, target) => {
     if (target >= S.nPlates) S.nPlates = target + 1;
     const mx = b.x0 + b.w / 2, my = b.y0 + b.d / 2;
     // keep the layout of the source plate (centred), or centre the models when unknown
@@ -737,9 +765,11 @@ async function add3mf(buf, base) {
     }
     dx += plateX(target);
     for (const o of list) {
-      const pos = o.positions;
+      let pos = o.positions;
       for (let i = 0; i < pos.length; i += 3) { pos[i] += dx; pos[i + 1] += dy; }
-      const obj = addObject({ name: o.name || base, positions: pos, codes: o.paint, sup: o.sup, seam: o.seam, filament: fmap(o.filament) });
+      const paint = { color: o.paint, supports: o.sup, seam: o.seam };
+      pos = await lighter(o.name || base, pos, paint);
+      const obj = addObject({ name: o.name || base, positions: pos, codes: paint.color, sup: paint.supports, seam: paint.seam, filament: fmap(o.filament) });
       const st = obj.states;
       for (let i = 0; i < st.length; i++) if (st[i]) st[i] = fmap(st[i]);
       recolor(obj);
@@ -749,17 +779,17 @@ async function add3mf(buf, base) {
     }
   };
   let target = first;
-  used.forEach((g, k) => {
+  for (const [k, g] of used.entries()) {
     const bx = boxes[k];
     let cell = r.bed && g.id ? cellById(g.id, r.bed) : null;
     if (cell && !inCell(bx, cell)) cell = null;
     if (!cell && guess) cell = cellByPos(bx, guess[0], guess[1]);
-    place(g.list, bx, cell, target++);
-  });
+    await place(g.list, bx, cell, target++);
+  }
   // models that sat beside the plates in the project: a plate of their own, packed (more plates if needed)
   if (loose.length) {
     const t = target;
-    for (const o of loose) place([o], boxOf([o]), null, t);
+    for (const o of loose) await place([o], boxOf([o]), null, t);
     arrange(t, false);
   }
   // a plain 3MF that names more filaments than the list has: add filaments for them
@@ -1180,7 +1210,7 @@ function applyMode() {
 function renderSide() {
   const side = $('#sl-side');
   if (!side || (!$('#view-slicer').classList.contains('active') && side.innerHTML)) return;
-  if (S.loading) { side.innerHTML = '<div class="card"><p class="muted">Reading the printer profiles…</p></div>'; return; }
+  if (S.loading) { side.innerHTML = '<div class="card"><p class="muted">Reading the printer profiles…</p><p class="small muted">The first time after an update or engine download this can take up to a minute.</p></div>'; return; }
   if (S.err) { side.innerHTML = `<div class="card"><div class="notice err">${esc(S.err)}</div><button class="btn small" data-sl="retry">Try again</button></div>`; return; }
   if (!S.info) { side.innerHTML = '<div class="card"><p class="muted">Add a printer first (Settings → Advanced → Printers).</p></div>'; return; }
   if (!S.info.known) {
@@ -1558,7 +1588,7 @@ function towerSpot(i) {
   const overlap = (p) => boxes.reduce((s, q) => s + Math.max(0, Math.min(p.x + W, q.x1) - Math.max(p.x, q.x0)) * Math.max(0, Math.min(p.y + D, q.y1) - Math.max(p.y, q.y0)), 0);
   let best = spots[0], bo = Infinity;
   for (const p of spots) { const v = overlap(p); if (v < bo) { bo = v; best = p; } if (v === 0) break; }
-  return { x: +(best.x + 5).toFixed(1), y: +(best.y + 5).toFixed(1) }; // inside the brim
+  return { x: +(best.x + 5).toFixed(1), y: +(best.y + 5).toFixed(1), free: bo === 0 }; // inside the brim
 }
 /** Project filament number for each tool of plate i's slice (tool t -> fil[t]). */
 function toolFilaments(i) { return (S.res[i] && S.res[i].tools) || S.filaments.map((_, k) => k + 1); }
@@ -1679,7 +1709,15 @@ async function slice(i = S.plate) {
   } catch (e) { busy(null); F.toast('Could not pack the plate: ' + e.message, true); return false; }
   const overrides = { ...S.overrides };
   if (S.bedType) overrides.curr_bed_type = S.bedType;
-  const opts = { printer: S.printerId, machine: S.info.machine, process: S.process, filaments: toolFils.map((f) => S.filaments[f - 1]), overrides, name: plateName(i), thumb: thumbnail(list), tower: toolFils.length > 1 ? towerSpot(i) : null };
+  let tower = toolFils.length > 1 ? towerSpot(i) : null;
+  // No free spot for the prime tower (the models fill the plate): a printer with a nozzle per
+  // colour (Creator 5) prints fine without one; a single nozzle needs it, so it is kept.
+  if (tower && !tower.free && (S.info.extruders || 1) > 1 && overrides.enable_prime_tower === undefined) {
+    overrides.enable_prime_tower = '0'; tower = null;
+    F.toast(`No room for the prime tower on plate ${i + 1}: printing without it (each colour has its own nozzle).`);
+  }
+  if (tower) tower = { x: tower.x, y: tower.y };
+  const opts = { printer: S.printerId, machine: S.info.machine, process: S.process, filaments: toolFils.map((f) => S.filaments[f - 1]), overrides, name: plateName(i), thumb: thumbnail(list), tower };
   const fd = new FormData();
   fd.append('options', JSON.stringify(opts));
   fd.append('model', blob, 'plate.3mf');

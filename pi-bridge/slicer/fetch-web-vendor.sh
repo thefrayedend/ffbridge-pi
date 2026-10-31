@@ -17,6 +17,7 @@ get() { # name version sha256
 get three 0.170.0 4a608a355dcaba72e0e5383cdc814303f5b6060b43c238cdf6932dceb699238d
 get three-mesh-bvh 0.8.3 be096ff206b7604ca2546687aede3acf861f8b61e50e9be8c49352e31386ed61
 get fflate 0.8.2 61fd5061e2fc8e5e3e3129f7f2fec7bd78a313e1bf4becbf1cc1cc9998d141dc
+get meshoptimizer 1.1.1 c23bef9ef57613c8a4e85d446c738154e52cac38e1a017dfb6ed33cfffa43593
 
 T="$W/three/package"
 cp "$T/build/three.module.js" "$V/three.module.js"
@@ -26,4 +27,6 @@ cp "$W/three-mesh-bvh/package/build/index.module.js" "$V/three-mesh-bvh.js"
 cp "$W/three-mesh-bvh/package/LICENSE" "$V/three-mesh-bvh-LICENSE.txt"
 cp "$W/fflate/package/esm/browser.js" "$V/fflate.js"
 cp "$W/fflate/package/LICENSE" "$V/fflate-LICENSE.txt"
+cp "$W/meshoptimizer/package/meshopt_simplifier.js" "$V/meshopt_simplifier.js"   # "Simplify model"
+cp "$W/meshoptimizer/package/LICENSE.md" "$V/meshoptimizer-LICENSE.txt"
 ls -l "$V"

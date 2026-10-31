@@ -105,6 +105,7 @@ class SetupServer {
     'png': 'image/png',
     'ico': 'image/x-icon',
     'json': 'application/json',
+    'webmanifest': 'application/manifest+json',
     'txt': 'text/plain; charset=utf-8',
     'jpg': 'image/jpeg',
     'jpeg': 'image/jpeg',
