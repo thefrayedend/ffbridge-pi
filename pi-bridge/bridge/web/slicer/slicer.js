@@ -60,6 +60,8 @@ const SIMPLE = [
   ['sparse_infill_density', 'Infill'], ['sparse_infill_pattern', 'Infill pattern'], ['enable_support', 'Supports'], ['support_type', 'Support type'],
   ['support_on_build_plate_only', 'Supports only from the plate'], ['brim_type', 'Brim'], ['enable_prime_tower', 'Prime tower'],
 ];
+/** Plates with this many triangles or more get lighter G-code when that setting is Auto. */
+const LIGHT_AT = 200000;
 // Enforcer / blocker colours (as in OrcaSlicer).
 const ENFORCE = '#2f7bff', BLOCK = '#e5383b', BASE = '#c9ccd1', OVERHANG = '#f2a33a';
 
@@ -72,6 +74,7 @@ const S = {
   merge: {}, // per plate: {u: used filaments, map: {extra filament: filament it prints with}}
   paint: { ch: 'color', tool: 'circle', filament: 2, mark: 1, size: 3, height: 2, smart: true, angle: 30, gap: 2, clip: 100, overhang: false, ohAngle: 30 },
   previewColor: 'tool', hiddenFeatures: new Set(), layer: 0,
+  light: 'auto', // lighter G-code for very detailed plates: 'auto' | 'on' | 'off'
   undo: [],
 };
 window.__sl = S; // for the automated browser checks (also __slCam)
@@ -137,7 +140,7 @@ function showSetup(st) {
 // ================================================================== printer + profiles
 const prefKey = (id) => 'ffb-slicer-' + id;
 function savePrefs() {
-  try { localStorage.setItem(prefKey(S.printerId), JSON.stringify({ machine: S.info && S.info.machine, process: S.process, bedType: S.bedType, filaments: S.filaments, overrides: S.overrides, color: S.previewColor, infill: S.infillFil || 0 })); } catch (_) { /* private mode */ }
+  try { localStorage.setItem(prefKey(S.printerId), JSON.stringify({ machine: S.info && S.info.machine, process: S.process, bedType: S.bedType, filaments: S.filaments, overrides: S.overrides, color: S.previewColor, infill: S.infillFil || 0, light: S.light })); } catch (_) { /* private mode */ }
 }
 function loadPrefs(id) { try { return JSON.parse(localStorage.getItem(prefKey(id)) || '{}'); } catch (_) { return {}; } }
 
@@ -169,6 +172,7 @@ async function loadPrinterInner(id, extra) {
   S.overrides = prefs.overrides && typeof prefs.overrides === 'object' ? prefs.overrides : {};
   S.previewColor = prefs.color || 'tool';
   S.infillFil = +prefs.infill || 0;
+  S.light = ['auto', 'on', 'off'].includes(prefs.light) ? prefs.light : 'auto';
   S.filaments = defaultFilaments(r, prefs.filaments);
   S.res = []; S.merge = {}; // another printer: earlier slices and colour choices do not apply
   if (S.ready) clearPreview();
@@ -1427,6 +1431,8 @@ function preparePanel() {
       ${SIMPLE.map(([k, l]) => byKey.has(k) ? settingRow(byKey.get(k), l) : '').join('')}
       <div class="sl-set ${S.infillFil ? 'changed' : ''}"><span class="nm" title="Print the inside of every model with one filament (for example cheap white), also on multi-colour prints. The outside keeps its colours as a skin about 3 mm thick."><span>Infill filament</span></span>
         <select data-set="infill"><option value="0">Same as the model</option>${S.filaments.map((f, k) => `<option value="${k + 1}" ${S.infillFil === k + 1 ? 'selected' : ''}>Filament ${k + 1}</option>`).join('')}</select></div>
+      <div class="sl-set ${S.light !== 'auto' ? 'changed' : ''}"><span class="nm" title="Very detailed models (scans, sculpts) make millions of tiny moves, and the board runs out of memory writing them. Lighter G-code keeps the paths to 0.05 mm (an eighth of the nozzle, invisible on the print) and writes straight moves instead of arcs: about a third less memory. Auto: only on plates with ${LIGHT_AT / 1000}k triangles or more."><span>Lighter G-code</span></span>
+        <select data-set="light"><option value="auto" ${S.light === 'auto' ? 'selected' : ''}>Auto (detailed plates)</option><option value="on" ${S.light === 'on' ? 'selected' : ''}>Always</option><option value="off" ${S.light === 'off' ? 'selected' : ''}>Never</option></select></div>
     </div>
     <div class="card"><h2>Plate ${S.plate + 1}${S.nPlates > 1 ? ` <span class="muted small">of ${S.nPlates}</span>` : ''}
         <span class="row gap"><button class="btn tiny" data-sl="addplate" title="Add an empty plate">+ Plate</button>${S.nPlates > 1 ? '<button class="btn tiny ghost-danger" data-sl="delplate" title="Delete this plate">Delete</button>' : ''}</span></h2>
@@ -1546,7 +1552,7 @@ function previewPanel() {
       ${allBtn ? `<div style="margin-top:10px">${allBtn}</div>` : ''}
     </div>
     <div class="card"><h2>Filament use</h2>${used.map(([t, g, m]) => { const f = fil[t] || t + 1; return `<div class="sl-use">${F.swatch(filColor(f), 'sm')}<span>${f} · ${esc((S.filaments[f - 1] || {}).preset ? S.filaments[f - 1].preset.replace(/ @.*$/, '') : '')}</span><span>${g.toFixed(1)} g${m ? ` · ${m} m` : ''}</span></div>`; }).join('') || '<p class="muted small">–</p>'}
-      ${mergeNote}${r.infill ? `<p class="small muted" style="margin-top:6px">The inside of the models is printed with filament ${r.infill}; their colours form a skin about 3 mm thick.</p>` : ''}${r.towerWall ? `<p class="small muted" style="margin-top:6px">The prime tower has ${r.towerWall === 'rib' ? 'ribbed' : 'plain'} walls on this plate: the usual cone-shaped one (it widens with the print height) does not fit beside the models.</p>` : ''}${r.noTower ? '<p class="small muted" style="margin-top:6px">No prime tower on this plate: the models leave no room for it. Each colour has its own nozzle, so it prints without one (a colour may leave a small string or blob where it starts).</p>' : ''}</div>
+      ${mergeNote}${r.infill ? `<p class="small muted" style="margin-top:6px">The inside of the models is printed with filament ${r.infill}; their colours form a skin about 3 mm thick.</p>` : ''}${r.towerWall ? `<p class="small muted" style="margin-top:6px">The prime tower has ${r.towerWall === 'rib' ? 'ribbed' : 'plain'} walls on this plate: the usual cone-shaped one (it widens with the print height) does not fit beside the models.</p>` : ''}${r.light && S.light === 'auto' ? '<p class="small muted" style="margin-top:6px">Lighter G-code was used: this plate is very detailed, so paths are kept to 0.05 mm and written as straight moves (saves the board about a third of its memory; Prepare → Quality to change).</p>' : ''}${r.noTower ? '<p class="small muted" style="margin-top:6px">No prime tower on this plate: the models leave no room for it. Each colour has its own nozzle, so it prints without one (a colour may leave a small string or blob where it starts).</p>' : ''}</div>
     ${(j.warnings || []).length ? `<div class="card"><h2>Check</h2>${j.warnings.map((w) => `<div class="notice warn small">${esc(w)}</div>`).join('')}</div>` : ''}
     <div class="card"><h2>Show</h2><div class="segmented"><button data-pc="tool" class="${S.previewColor === 'tool' ? 'active' : ''}">Filament</button><button data-pc="feature" class="${S.previewColor === 'feature' ? 'active' : ''}">Line type</button></div></div>
     <div class="sl-go"><div class="row gap"><a class="btn" href="/api/slicer/gcode?${q}&download=1" download title="Save the G-code (for a USB stick or another program)">G-code</a>${j.hasProject ? `<a class="btn" href="/api/slicer/gcode?${q}&download=3mf" download title="Save the sliced project (.gcode.3mf, opens in OrcaSlicer)">3MF</a>` : ''}<button class="btn primary big" style="flex:1" data-sl="print">Print${S.nPlates > 1 ? ` plate ${S.plate + 1}` : ''}…</button></div>
@@ -1637,6 +1643,7 @@ async function onChange(e) {
   if (set === 'machine') { savePrefsMachine(t.value); await loadPrinter(S.printerId); return; }
   if (set === 'bed') { S.bedType = t.value; changed(false); return; }
   if (set === 'infill') { S.infillFil = +t.value; changed(false); return; }
+  if (set === 'light') { S.light = t.value; changed(false); return; }
   if (set === 'process') { S.process = t.value; S.loading = true; renderSide(); await loadValues(); S.loading = false; changed(); return; }
   if (set === 'paintobj') { S.selected = S.objects.find((o) => o.id === +t.value) || null; renderSide(); return; }
   if (t.dataset.pbool) { S.paint[t.dataset.pbool] = t.checked; if (t.dataset.pbool === 'overhang') for (const o of S.objects) recolor(o); renderSide(); return; }
@@ -1813,7 +1820,7 @@ function askMerge(i, use) {
 }
 function plateKey(i) {
   const px = plateX(i);
-  return JSON.stringify([S.printerId, S.info && S.info.machine, S.process, S.bedType, S.filaments, S.overrides, S.merge[i] || null, S.infillFil || 0,
+  return JSON.stringify([S.printerId, S.info && S.info.machine, S.process, S.bedType, S.filaments, S.overrides, S.merge[i] || null, S.infillFil || 0, S.light,
     platesObjects(i).map((o) => { const e = o.mesh.matrix.elements.map((x) => Math.round(x * 1000)); e[12] -= Math.round(px * 1000); return [o.id, o.filament, e, ...paintHashes(o)]; })]);
 }
 
@@ -1935,6 +1942,15 @@ async function slice(i = S.plate) {
     overrides.sparse_infill_filament_id = String(toolOf.get(infill));
     if (overrides.mmu_segmented_region_max_width === undefined) overrides.mmu_segmented_region_max_width = '3';
   }
+  // Lighter G-code (see the Quality card): the engine keeps every move of the file in memory while
+  // it writes it, ~300 bytes each; a detailed scan makes millions. Measured on a 1M-triangle
+  // painted helmet: 2.5 GB -> 1.7 GB, same print. The user's own values for these keys win.
+  const tris = list.reduce((n, o) => n + o.orig.length / 9, 0);
+  const light = S.light === 'on' || (S.light === 'auto' && tris >= LIGHT_AT);
+  if (light) {
+    if (overrides.resolution === undefined) overrides.resolution = '0.05';
+    if (overrides.enable_arc_fitting === undefined) overrides.enable_arc_fitting = '0';
+  }
   const towerOn = !/^(0|false)$/.test(String(valueOf('enable_prime_tower')));
   let tower = toolFils.length > 1 && towerOn ? towerSpot(i, toolFils.length) : null, noTower = false, towerWall = null;
   // No free spot for the prime tower (the models fill the plate): a printer with a nozzle per
@@ -1958,7 +1974,7 @@ async function slice(i = S.plate) {
     xhr.send(fd);
   });
   if (!r.ok) { busy(null); F.toast(r.message || 'Slicing could not start.', true); renderSide(); return false; }
-  S.res[i] = { job: r.job, key, g: null, tools: toolFils, noTower, towerWall, infill };
+  S.res[i] = { job: r.job, key, g: null, tools: toolFils, noTower, towerWall, infill, light };
   renderSide(); renderPlateBar();
   poll(i);
   return true;
