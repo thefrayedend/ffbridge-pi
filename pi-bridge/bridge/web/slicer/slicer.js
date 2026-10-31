@@ -75,6 +75,7 @@ const S = {
   paint: { ch: 'color', tool: 'circle', filament: 2, mark: 1, size: 3, height: 2, smart: true, angle: 30, gap: 2, clip: 100, overhang: false, ohAngle: 30 },
   previewColor: 'tool', hiddenFeatures: new Set(), layer: 0,
   light: 'auto', // lighter G-code for very detailed plates: 'auto' | 'on' | 'off'
+  customLayer: false, // layer height: a box to type in instead of the dropdown (after "Other…")
   undo: [],
 };
 window.__sl = S; // for the automated browser checks (also __slCam)
@@ -1413,12 +1414,32 @@ function settingRow(s, label, tip = false) {
   let input;
   if (s.type === 'bool') input = `<input type="checkbox" data-ov="${key}" ${v === '1' || v === 'true' ? 'checked' : ''}>`;
   else if (s.type === 'enum') input = `<select data-ov="${key}">${s.enum.map((e) => `<option value="${esc(e.value)}" ${e.value === v ? 'selected' : ''}>${esc(e.label)}</option>`).join('')}</select>`;
-  else if (s.type === 'percent') input = `<span class="unit-in"><input type="number" data-ov="${key}" data-pct value="${esc(v.replace('%', ''))}" ${s.min !== undefined ? `min="${s.min}"` : ''} ${s.max !== undefined ? `max="${s.max}"` : ''} step="any"><span>%</span></span>`;
-  else if (s.type === 'int' || s.type === 'float') input = `<span class="unit-in"><input type="number" data-ov="${key}" value="${esc(v)}" ${s.min !== undefined ? `min="${s.min}"` : ''} ${s.max !== undefined && s.max < 1e6 ? `max="${s.max}"` : ''} step="${s.type === 'int' ? 1 : 'any'}"><span>${esc(s.unit || '')}</span></span>`;
+  else if (s.type === 'percent') input = `<span class="unit-in"><input type="number" data-ov="${key}" data-pct value="${esc(v.replace('%', ''))}" ${s.min !== undefined ? `min="${s.min}"` : ''} ${s.max !== undefined ? `max="${s.max}"` : ''} step="${stepFor(v, 1)}"><span>%</span></span>`;
+  else if (key === 'layer_height' && !S.customLayer) {
+    // the usual heights for this nozzle, plus "Other…" for anything else
+    const cur = +v, list = layerHeights();
+    if (cur && !list.includes(cur)) list.push(cur);
+    list.sort((a, b) => a - b);
+    input = `<span class="unit-in"><select data-ov="${key}">${list.map((h) => `<option value="${h}" ${h === cur ? 'selected' : ''}>${h.toFixed(2)}</option>`).join('')}<option value="__other">Other…</option></select><span>mm</span></span>`;
+  } else if (s.type === 'int' || s.type === 'float') input = `<span class="unit-in"><input type="number" data-ov="${key}" value="${esc(v)}" ${s.min !== undefined ? `min="${s.min}"` : ''} ${s.max !== undefined && s.max < 1e6 ? `max="${s.max}"` : ''} step="${s.type === 'int' ? 1 : stepFor(v)}" ${key === 'layer_height' ? 'autofocus' : ''}><span>${esc(s.unit || '')}</span></span>`;
   else input = `<input data-ov="${key}" value="${esc(v)}" title="${esc(s.unit || '')}">`;
   return `<div class="sl-set ${changed ? 'changed' : ''}"><span class="nm" title="${esc(s.tooltip || '')}"><span>${esc(label || s.label)}</span>${changed ? `<button class="reset" data-reset="${key}" title="Back to the profile's value">↺</button>` : ''}</span>${input}${tip && s.tooltip ? `<span class="tip">${esc(s.tooltip)}</span>` : ''}</div>`;
 }
 
+/** Arrow step for a decimal field: the precision the value is written in (0.8 → 0.1, 0.45 → 0.01). */
+function stepFor(v, whole = 0.1) { const d = (String(v).split('.')[1] || '').length; return d ? +(10 ** -d).toFixed(d) : whole; }
+/** Nozzle size (mm) of the selected machine profile, from its name ("0.4 nozzle"). */
+function nozzleSize() { const m = /(\d\.\d+)\s*(HF\s*)?nozzle/i.exec(S.info && S.info.machine || ''); return m ? +m[1] : 0.4; }
+const LAYER_HEIGHTS = { 0.2: [0.05, 0.06, 0.08, 0.1, 0.12, 0.14], 0.25: [0.06, 0.08, 0.1, 0.12, 0.16, 0.18], 0.4: [0.08, 0.1, 0.12, 0.16, 0.2, 0.24, 0.28], 0.6: [0.12, 0.16, 0.2, 0.24, 0.3, 0.36, 0.42], 0.8: [0.2, 0.24, 0.3, 0.4, 0.5, 0.6] };
+/** The usual layer heights for the selected nozzle (a quarter to three quarters of its size). */
+function layerHeights() {
+  const n = nozzleSize();
+  const list = LAYER_HEIGHTS[n] ? LAYER_HEIGHTS[n].slice() : [];
+  if (!list.length) for (let h = Math.round(n * 25) / 100; h <= n * 0.75 + 1e-9; h = +(h + 0.04).toFixed(2)) list.push(h);
+  const def = +fmtVal(S.values.layer_height);
+  if (def && !list.includes(def)) list.push(def);
+  return list;
+}
 const plateOptions = (cur) => Array.from({ length: S.nPlates }, (_, i) => `<option value="${i}" ${i === cur ? 'selected' : ''}>Plate ${i + 1}</option>`).join('') + `<option value="${S.nPlates}">New plate</option>`;
 function preparePanel() {
   const byKey = new Map((S.schema || []).map((s) => [s.key, s]));
@@ -1653,8 +1674,15 @@ async function onChange(e) {
   if (t.dataset.objPlate) { const o = S.objects.find((x) => x.id === +t.dataset.objPlate); moveToPlate(o, +t.value); return; }
   if (t.dataset.ov) {
     const key = t.dataset.ov;
+    if (t.value === '__other') { S.customLayer = true; renderSide(); return; } // layer height: show a box to type in
     let v = t.type === 'checkbox' ? (t.checked ? '1' : '0') : t.value;
     if (t.dataset.pct !== undefined) v = v + '%';
+    if (key === 'layer_height') {
+      // typed in the "Other…" box: back to the dropdown, which then lists this value too
+      S.customLayer = false;
+      if (!(+v > 0)) { F.toast('Layer height must be a number above 0 (for example 0.15).', true); renderSide(); return; }
+      v = String(+(+v).toFixed(3));
+    }
     if (String(fmtVal(S.values[key])) === v) delete S.overrides[key]; else S.overrides[key] = v;
     changed();
     return;
